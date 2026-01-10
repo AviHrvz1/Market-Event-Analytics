@@ -380,6 +380,149 @@
             font-family: 'Courier New', monospace;
         }
 
+        /* TradingView Chart Iframe Container - Resizable and Draggable */
+        #chart-iframe-container {
+            display: none;
+            position: fixed;
+            top: 10%;
+            right: 5%;
+            width: 50%;
+            height: 80vh;
+            min-width: 400px;
+            min-height: 300px;
+            max-width: 95vw;
+            max-height: 95vh;
+            background: #1e1e1e;
+            z-index: 10000;
+            flex-direction: column;
+            box-shadow: -4px 0 20px rgba(0, 0, 0, 0.5);
+            border-radius: 8px 0 0 0;
+            overflow: hidden;
+        }
+
+        #chart-iframe-container.show {
+            display: flex;
+        }
+
+        #chart-iframe-header {
+            background: #2c3e50;
+            padding: 12px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            flex-shrink: 0;
+            cursor: move;
+            user-select: none;
+        }
+
+        #chart-iframe-header h3 {
+            margin: 0;
+            color: #fff;
+            font-size: 1.1em;
+            font-weight: 600;
+            pointer-events: none;
+        }
+
+        #chart-iframe-close {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85em;
+            transition: all 0.2s;
+            z-index: 10001;
+        }
+
+        #chart-iframe-close:hover {
+            background: #c0392b;
+            transform: scale(1.05);
+        }
+
+        #chart-iframe {
+            flex: 1;
+            width: 100%;
+            border: none;
+            background: #1e1e1e;
+            min-height: 0;
+        }
+
+        /* Resize handles */
+        .resize-handle {
+            position: absolute;
+            background: transparent;
+            z-index: 10001;
+        }
+
+        .resize-handle.n {
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 5px;
+            cursor: ns-resize;
+        }
+
+        .resize-handle.s {
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 5px;
+            cursor: ns-resize;
+        }
+
+        .resize-handle.e {
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: 5px;
+            cursor: ew-resize;
+        }
+
+        .resize-handle.w {
+            top: 0;
+            left: 0;
+            bottom: 0;
+            width: 5px;
+            cursor: ew-resize;
+        }
+
+        .resize-handle.ne {
+            top: 0;
+            right: 0;
+            width: 10px;
+            height: 10px;
+            cursor: nesw-resize;
+        }
+
+        .resize-handle.nw {
+            top: 0;
+            left: 0;
+            width: 10px;
+            height: 10px;
+            cursor: nwse-resize;
+        }
+
+        .resize-handle.se {
+            bottom: 0;
+            right: 0;
+            width: 10px;
+            height: 10px;
+            cursor: nwse-resize;
+        }
+
+        .resize-handle.sw {
+            bottom: 0;
+            left: 0;
+            width: 10px;
+            height: 10px;
+            cursor: nesw-resize;
+        }
+
+        /* Iframe overlays the table, so no need to reduce table width */
+        /* Table maintains full width and can scroll horizontally if needed */
+
         .date-time {
             color: #666;
         }
@@ -1100,19 +1243,24 @@
         <!-- Bearish Analytics Tab -->
         <div id="bearish-analytics-tab" class="tab-content active">
             <div class="controls" style="padding: 20px 30px;">
-                <div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap;">
-                    <div>
-                        <label style="font-weight: 600; color: #2c3e50; margin-right: 8px;">Analysis Date:</label>
-                        <input type="date" id="bearish-date" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 1em;" onchange="updateDaysDifference()">
+                <!-- Search Mode Section -->
+                <div style="margin-bottom: 20px; padding: 15px; background: #f0f4ff; border-radius: 8px; border: 2px solid #667eea;">
+                    <label style="font-weight: 600; color: #2c3e50; margin-bottom: 12px; display: block;">Search Mode:</label>
+                    <div style="display: flex; gap: 24px; margin-bottom: 16px;">
+                        <label style="display: flex; align-items: center; gap: 6px; font-weight: 500; color: #2c3e50; cursor: pointer;">
+                            <input type="radio" name="search-mode" id="search-mode-industry" value="industry" checked onclick="toggleSearchMode()">
+                            <span>By Industry</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-weight: 500; color: #2c3e50; cursor: pointer;">
+                            <input type="radio" name="search-mode" id="search-mode-ticker" value="ticker" onclick="toggleSearchMode()">
+                            <span>By Ticker</span>
+                        </label>
                     </div>
-                    <div>
-                        <label style="font-weight: 600; color: #2c3e50; margin-right: 8px;">Target Date:</label>
-                        <input type="date" id="target-date" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 1em;" onchange="updateDaysDifference()">
-                        <span id="days-difference" style="margin-left: 10px; color: #667eea; font-weight: 500; font-size: 0.9em;"></span>
-                    </div>
-                    <div>
-                        <label style="font-weight: 600; color: #2c3e50; margin-right: 8px;">Industry:</label>
-                        <select id="industry-filter" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 1em; min-width: 263px;">
+                    
+                    <!-- Industry Field (shown when "By Industry" selected) -->
+                    <div id="industry-field-container">
+                        <label style="font-weight: 600; color: #2c3e50; margin-right: 8px; display: block; margin-bottom: 4px;">Industry:</label>
+                        <select id="industry-filter" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 1em; min-width: 302px; width: 100%; max-width: 300px;">
                             <option value="All Industries">All Industries</option>
                             <option value="Technology">Technology</option>
                             <option value="Consumer">Consumer</option>
@@ -1127,19 +1275,52 @@
                             <option value="ETFs">ETFs</option>
                         </select>
                     </div>
+                    
+                    <!-- Ticker Field (shown when "By Ticker" selected) -->
+                    <div id="ticker-field-container" style="display: none;">
+                        <label style="font-weight: 600; color: #2c3e50; margin-right: 8px; display: block; margin-bottom: 4px;">Tickers:</label>
+                        <input type="text" id="ticker-filter" placeholder="Enter tickers (e.g., AAPL,MSFT,GOOGL)" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 1em; min-width: 302px; width: 100%; max-width: 300px;">
+                    </div>
+                </div>
+
+                <!-- Date Range Section -->
+                <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
                     <div>
-                        <label style="font-weight: 600; color: #2c3e50; margin-right: 8px;">Filter Type:</label>
-                        <select id="filter-type" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 1em; min-width: 120px;" onchange="updatePctThresholdPlaceholder()">
+                        <label style="font-weight: 600; color: #2c3e50; margin-right: 8px; display: block; margin-bottom: 4px;">Analysis Date:</label>
+                        <input type="date" id="bearish-date" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 1em;" onchange="updateDaysDifference()">
+                    </div>
+                    <div>
+                        <label style="font-weight: 600; color: #2c3e50; margin-right: 8px; display: block; margin-bottom: 4px;">Target Date:</label>
+                        <input type="date" id="target-date" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 1em;" onchange="updateDaysDifference()">
+                        <span id="days-difference" style="margin-left: 10px; color: #667eea; font-weight: 500; font-size: 0.9em;"></span>
+                    </div>
+                </div>
+
+                <!-- Filter Options Section -->
+                <div style="display: flex; gap: 20px; align-items: flex-end; margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px; flex-wrap: wrap;">
+                    <div>
+                        <label style="font-weight: 600; color: #2c3e50; margin-right: 8px; display: block; margin-bottom: 4px;">Filter Type:</label>
+                        <select id="filter-type" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 1em; min-width: 140px;" onchange="updatePctThresholdPlaceholder()">
                             <option value="bearish">Bearish Drop</option>
                             <option value="bullish">Bullish Recovery</option>
                         </select>
                     </div>
                     <div>
-                        <label style="font-weight: 600; color: #2c3e50; margin-right: 8px;">Min % Change:</label>
-                        <input type="number" id="pct-threshold" step="0.1" value="-5" min="-100" max="100" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 1em; width: 60px;" onchange="updatePctThresholdPlaceholder()">
-                        <span style="margin-left: 5px; color: #666;">%</span>
+                        <label style="font-weight: 600; color: #2c3e50; margin-right: 8px; display: block; margin-bottom: 4px;">Min % Change:</label>
+                        <div style="display: flex; align-items: center; gap: 4px;">
+                            <input type="number" id="pct-threshold" step="0.1" value="-5" min="-100" max="100" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 1em; width: 80px;" onchange="updatePctThresholdPlaceholder()">
+                            <span style="color: #666; font-weight: 500;">%</span>
+                        </div>
                     </div>
-                    <button class="refresh-btn" onclick="loadBearishAnalytics()">🔍 Search</button>
+                    <div>
+                        <label style="font-weight: 600; color: #2c3e50; margin-right: 8px; display: block; margin-bottom: 4px;">Flexible Date (± days):</label>
+                        <input type="number" id="flexible-days" step="1" value="2" min="0" max="10" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 1em; width: 80px;">
+                    </div>
+                </div>
+
+                <!-- Search Button -->
+                <div style="text-align: center; margin-top: 10px;">
+                    <button class="refresh-btn" onclick="loadBearishAnalytics()" style="padding: 12px 32px; font-size: 1.1em; font-weight: 600; min-width: 200px;">🔍 Search</button>
                 </div>
             </div>
 
@@ -1188,6 +1369,25 @@
                         </tbody>
                     </table>
                 </div>
+            </div>
+
+            <!-- TradingView Chart Iframe Container - Resizable and Draggable -->
+            <div id="chart-iframe-container">
+                <!-- Resize handles -->
+                <div class="resize-handle n"></div>
+                <div class="resize-handle s"></div>
+                <div class="resize-handle e"></div>
+                <div class="resize-handle w"></div>
+                <div class="resize-handle ne"></div>
+                <div class="resize-handle nw"></div>
+                <div class="resize-handle se"></div>
+                <div class="resize-handle sw"></div>
+                
+                <div id="chart-iframe-header">
+                    <h3 id="chart-iframe-title">TradingView Chart</h3>
+                    <button id="chart-iframe-close" onclick="closeChartIframe()">✕ Close</button>
+                </div>
+                <iframe id="chart-iframe" src=""></iframe>
             </div>
         </div>
         <!-- End Bearish Analytics Tab -->
@@ -3251,16 +3451,25 @@
                 if (typeof updatePctThresholdPlaceholder === 'function') {
                     updatePctThresholdPlaceholder();
                 }
-                // Set default dates if not set
+                // Set default dates to today and tomorrow
                 const bearishDate = document.getElementById('bearish-date');
                 const targetDate = document.getElementById('target-date');
+                
+                // Get today's date in YYYY-MM-DD format
+                const today = new Date();
+                const todayStr = today.toISOString().split('T')[0];
+                
+                // Get tomorrow's date in YYYY-MM-DD format
+                const tomorrow = new Date(today);
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                const tomorrowStr = tomorrow.toISOString().split('T')[0];
+                
+                // Set defaults if not already set
                 if (!bearishDate.value) {
-                    const defaultBearish = new Date();
-                    defaultBearish.setDate(defaultBearish.getDate() - 30);
-                    bearishDate.value = defaultBearish.toISOString().split('T')[0];
+                    bearishDate.value = todayStr;
                 }
                 if (!targetDate.value) {
-                    targetDate.value = new Date().toISOString().split('T')[0];
+                    targetDate.value = tomorrowStr;
                 }
                 // Update days difference display
                 updateDaysDifference();
@@ -3298,6 +3507,180 @@
             }
         }
 
+        // Variables for drag and resize functionality
+        let isDragging = false;
+        let isResizing = false;
+        let resizeDirection = '';
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let initialX = 0;
+        let initialY = 0;
+        let initialWidth = 0;
+        let initialHeight = 0;
+
+        function openChartIframe(ticker, bearishDate, targetDate) {
+            const container = document.getElementById('chart-iframe-container');
+            const iframe = document.getElementById('chart-iframe');
+            const title = document.getElementById('chart-iframe-title');
+            const bearishResults = document.getElementById('bearish-results');
+            
+            // Set the iframe source with ticker, bearish_date, and target_date
+            let url = `/chart?symbol=${encodeURIComponent(ticker)}`;
+            if (bearishDate) {
+                url += `&bearish_date=${encodeURIComponent(bearishDate)}`;
+            }
+            if (targetDate) {
+                url += `&target_date=${encodeURIComponent(targetDate)}`;
+            }
+            iframe.src = url;
+            
+            // Update title
+            title.textContent = `${ticker} - TradingView Chart${bearishDate ? ' (Bearish: ' + bearishDate + ')' : ''}`;
+            
+            // Show the container
+            container.classList.add('show');
+            
+            // Initialize drag and resize handlers
+            initDragAndResize();
+            
+            // No need to adjust table width - iframe overlays on top
+        }
+
+        function closeChartIframe() {
+            const container = document.getElementById('chart-iframe-container');
+            const iframe = document.getElementById('chart-iframe');
+            const bearishResults = document.getElementById('bearish-results');
+            
+            // Hide the container
+            container.classList.remove('show');
+            
+            // Clear iframe source to stop loading
+            iframe.src = '';
+        }
+
+        function initDragAndResize() {
+            const container = document.getElementById('chart-iframe-container');
+            const header = document.getElementById('chart-iframe-header');
+            const resizeHandles = container.querySelectorAll('.resize-handle');
+            
+            if (!container || !header) return;
+
+            // Drag functionality - make header draggable
+            header.addEventListener('mousedown', (e) => {
+                if (e.target.id === 'chart-iframe-close') return; // Don't drag when clicking close button
+                isDragging = true;
+                dragStartX = e.clientX;
+                dragStartY = e.clientY;
+                initialX = container.offsetLeft;
+                initialY = container.offsetTop;
+                e.preventDefault();
+            });
+
+            // Resize functionality
+            resizeHandles.forEach(handle => {
+                handle.addEventListener('mousedown', (e) => {
+                    isResizing = true;
+                    resizeDirection = handle.className.split(' ')[1]; // Get direction (n, s, e, w, ne, nw, se, sw)
+                    dragStartX = e.clientX;
+                    dragStartY = e.clientY;
+                    initialX = container.offsetLeft;
+                    initialY = container.offsetTop;
+                    initialWidth = container.offsetWidth;
+                    initialHeight = container.offsetHeight;
+                    e.preventDefault();
+                    e.stopPropagation();
+                });
+            });
+
+            // Mouse move handler
+            document.addEventListener('mousemove', (e) => {
+                if (isDragging) {
+                    const deltaX = e.clientX - dragStartX;
+                    const deltaY = e.clientY - dragStartY;
+                    let newX = initialX + deltaX;
+                    let newY = initialY + deltaY;
+                    
+                    // Constrain to viewport
+                    const maxX = window.innerWidth - container.offsetWidth;
+                    const maxY = window.innerHeight - container.offsetHeight;
+                    newX = Math.max(0, Math.min(newX, maxX));
+                    newY = Math.max(0, Math.min(newY, maxY));
+                    
+                    container.style.left = newX + 'px';
+                    container.style.top = newY + 'px';
+                    container.style.right = 'auto';
+                } else if (isResizing) {
+                    const deltaX = e.clientX - dragStartX;
+                    const deltaY = e.clientY - dragStartY;
+                    
+                    let newWidth = initialWidth;
+                    let newHeight = initialHeight;
+                    let newX = initialX;
+                    let newY = initialY;
+                    
+                    // Handle different resize directions
+                    if (resizeDirection.includes('e')) {
+                        newWidth = initialWidth + deltaX;
+                    }
+                    if (resizeDirection.includes('w')) {
+                        newWidth = initialWidth - deltaX;
+                        newX = initialX + deltaX;
+                    }
+                    if (resizeDirection.includes('s')) {
+                        newHeight = initialHeight + deltaY;
+                    }
+                    if (resizeDirection.includes('n')) {
+                        newHeight = initialHeight - deltaY;
+                        newY = initialY + deltaY;
+                    }
+                    
+                    // Apply constraints
+                    const minWidth = parseInt(getComputedStyle(container).minWidth) || 400;
+                    const minHeight = parseInt(getComputedStyle(container).minHeight) || 300;
+                    const maxWidth = parseInt(getComputedStyle(container).maxWidth) || window.innerWidth;
+                    const maxHeight = parseInt(getComputedStyle(container).maxHeight) || window.innerHeight;
+                    
+                    newWidth = Math.max(minWidth, Math.min(newWidth, maxWidth));
+                    newHeight = Math.max(minHeight, Math.min(newHeight, maxHeight));
+                    
+                    // Adjust position for west and north resizing
+                    if (resizeDirection.includes('w')) {
+                        const widthDelta = newWidth - initialWidth;
+                        newX = initialX - widthDelta;
+                        if (newX < 0) {
+                            newWidth += newX;
+                            newX = 0;
+                        }
+                    }
+                    if (resizeDirection.includes('n')) {
+                        const heightDelta = newHeight - initialHeight;
+                        newY = initialY - heightDelta;
+                        if (newY < 0) {
+                            newHeight += newY;
+                            newY = 0;
+                        }
+                    }
+                    
+                    container.style.width = newWidth + 'px';
+                    container.style.height = newHeight + 'px';
+                    if (resizeDirection.includes('w')) {
+                        container.style.left = newX + 'px';
+                        container.style.right = 'auto';
+                    }
+                    if (resizeDirection.includes('n')) {
+                        container.style.top = newY + 'px';
+                    }
+                }
+            });
+
+            // Mouse up handler
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+                isResizing = false;
+                resizeDirection = '';
+            });
+        }
+
         function copyTickerToClipboard(ticker) {
             navigator.clipboard.writeText(ticker).then(() => {
                 // Show temporary feedback
@@ -3328,12 +3711,71 @@
             console.log(`Ticker ${e.detail.ticker} copied to clipboard`);
         });
 
+        function toggleSearchMode() {
+            const byIndustryRadio = document.getElementById('search-mode-industry');
+            const industryContainer = document.getElementById('industry-field-container');
+            const tickerContainer = document.getElementById('ticker-field-container');
+            const tickerInput = document.getElementById('ticker-filter');
+            const industrySelect = document.getElementById('industry-filter');
+
+            const byIndustry = !byIndustryRadio || byIndustryRadio.checked;
+
+            if (byIndustry) {
+                industryContainer.style.display = 'block';
+                tickerContainer.style.display = 'none';
+                tickerInput.value = '';
+            } else {
+                industryContainer.style.display = 'none';
+                tickerContainer.style.display = 'block';
+                industrySelect.value = 'All Industries';
+                tickerInput.focus(); // Auto-focus when switching to ticker mode
+            }
+        }
+
+        // Initialize search mode on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            toggleSearchMode();
+            
+            // Set default dates to today and tomorrow on page load
+            const bearishDate = document.getElementById('bearish-date');
+            const targetDate = document.getElementById('target-date');
+            
+            if (bearishDate && targetDate) {
+                // Get today's date in YYYY-MM-DD format
+                const today = new Date();
+                const todayStr = today.toISOString().split('T')[0];
+                
+                // Get tomorrow's date in YYYY-MM-DD format
+                const tomorrow = new Date(today);
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                const tomorrowStr = tomorrow.toISOString().split('T')[0];
+                
+                // Set defaults if not already set
+                if (!bearishDate.value) {
+                    bearishDate.value = todayStr;
+                }
+                if (!targetDate.value) {
+                    targetDate.value = tomorrowStr;
+                }
+                
+                // Update days difference display
+                if (typeof updateDaysDifference === 'function') {
+                    updateDaysDifference();
+                }
+            }
+        });
+
         function loadBearishAnalytics() {
             const bearishDate = document.getElementById('bearish-date').value;
             const targetDate = document.getElementById('target-date').value;
-            const industry = document.getElementById('industry-filter').value;
             const filterType = document.getElementById('filter-type').value;
             const pctThreshold = parseFloat(document.getElementById('pct-threshold').value);
+            const flexibleDays = parseInt(document.getElementById('flexible-days').value) || 0;
+
+            const byIndustry = document.getElementById('search-mode-industry').checked;
+            const industrySelect = document.getElementById('industry-filter');
+            const tickerInput = document.getElementById('ticker-filter');
+            const rawTickerFilter = tickerInput.value || '';
 
             if (!bearishDate || !targetDate) {
                 alert('Please select both bearish date and target date');
@@ -3348,6 +3790,14 @@
             if (isNaN(pctThreshold)) {
                 alert('Please enter a valid percentage threshold');
                 return;
+            }
+
+            // Validate ticker input when searching by ticker
+            if (!byIndustry) {
+                if (!rawTickerFilter.trim()) {
+                    alert('Please enter at least one ticker when using "By Ticker" search.');
+                    return;
+                }
             }
 
             // Close any existing EventSource
@@ -3374,26 +3824,58 @@
             const params = new URLSearchParams({
                 bearish_date: bearishDate,
                 target_date: targetDate,
-                industry: industry,
                 filter_type: filterType,
-                pct_threshold: pctThreshold.toString()
+                pct_threshold: pctThreshold.toString(),
+                flexible_days: flexibleDays.toString()
             });
+
+            if (byIndustry) {
+                params.set('industry', industrySelect.value);
+            } else {
+                // Normalize ticker filter: uppercase, remove extra spaces
+                const tickers = rawTickerFilter
+                    .split(',')
+                    .map(t => t.trim().toUpperCase())
+                    .filter(t => t.length > 0);
+
+                if (tickers.length === 0) {
+                    alert('Please enter at least one valid ticker symbol.');
+                    return;
+                }
+
+                params.set('ticker_filter', tickers.join(','));
+                // Explicitly clear industry on backend side
+                params.set('industry', '');
+            }
             
             const streamUrl = `/api/bearish-analytics/stream?${params.toString()}`;
-            console.log('[Bearish Analytics] Starting stream:', streamUrl);
+            
+            // Log main query parameters for debugging
+            const tickerFilter = byIndustry ? null : rawTickerFilter.trim();
+            const industry = byIndustry ? industrySelect.value : '';
+            
+            console.log('='.repeat(80));
+            console.log('[QUERY] Bearish Analytics Request:');
+            console.log(`  bearish_date: ${bearishDate}`);
+            console.log(`  target_date: ${targetDate}`);
+            console.log(`  filter_type: ${filterType}`);
+            console.log(`  pct_threshold: ${pctThreshold}`);
+            console.log(`  flexible_days: ${flexibleDays}`);
+            console.log(`  ticker_filter: ${tickerFilter || 'None'}`);
+            console.log(`  industry: ${industry || 'All'}`);
+            console.log('='.repeat(80));
             
             // Create EventSource for real-time log streaming
             bearishEventSource = new EventSource(streamUrl);
             
             bearishEventSource.onopen = function() {
-                console.log('[Bearish Analytics] Stream opened');
                 logsContent.innerHTML = '<div style="color: #569cd6;">📡 Connected to server... Starting analysis...</div>';
             };
             
             bearishEventSource.onmessage = function(event) {
                 try {
                     const data = JSON.parse(event.data);
-                    console.log('[Bearish Analytics] Received:', data.type);
+                    // Only log complete, not every received message
                     
                     if (data.type === 'log') {
                         // Append log message in real-time
@@ -3415,16 +3897,105 @@
                         bearishEventSource.close();
                     } else if (data.type === 'complete') {
                         // Analysis complete, display results
-                        console.log('[Bearish Analytics] Complete:', {
-                            total: data.total,
-                            logsCount: data.logs?.length || 0
-                        });
+                        console.log('[QUERY] Complete - Results:', data.total, 'stocks found');
                         
                         document.getElementById('bearish-loading').style.display = 'none';
                         
                         // Display all logs (in case any were missed)
                         if (data.logs && data.logs.length > 0) {
                             displayBearishLogs(data.logs);
+                        }
+                        
+                            // Check for ticker warnings in logs
+                            if (data.logs && data.logs.length > 0) {
+                                // Look for ticker filter log messages
+                                let tickerFilterLog = null;
+                                let unknownTickersLog = null;
+                                let claudeApiFailed = false;
+                                let failedTickers = [];
+                                
+                                for (const log of data.logs) {
+                                    // Match: "🎯 Ticker filter applied: AAPL, MSFT (matched 2/3)"
+                                    if (log.includes('🎯 Ticker filter applied:')) {
+                                        const match = log.match(/matched\s+(\d+)\/(\d+)/);
+                                        if (match) {
+                                            const matched = parseInt(match[1]);
+                                            const requested = parseInt(match[2]);
+                                            tickerFilterLog = { matched, requested };
+                                        }
+                                    }
+                                    // Match: "⚠️ Unknown or unsupported tickers: INVALID, BAD"
+                                    if (log.includes('⚠️ Unknown or unsupported tickers:')) {
+                                        const match = log.match(/⚠️\s+Unknown or unsupported tickers:\s*(.+)/);
+                                        if (match) {
+                                            const tickersStr = match[1].trim();
+                                            unknownTickersLog = tickersStr.split(',').map(t => t.trim()).filter(t => t);
+                                        }
+                                    }
+                                    // Check for Claude API failure messages
+                                    if ((log.includes('❌ Failed to fetch info') && log.includes('Claude API')) || 
+                                        (log.includes('Could not process') && log.includes('Claude API unavailable')) ||
+                                        log.includes('No valid tickers to process') && log.includes('Claude API failed')) {
+                                        claudeApiFailed = true;
+                                    }
+                                    // Match: "⚠️ Could not process X ticker(s): TICKER1, TICKER2"
+                                    if (log.includes('⚠️ Could not process')) {
+                                        const match = log.match(/⚠️\s+Could not process\s+\d+\s+ticker\(s\):\s*(.+?)(?:\s*\(|$)/);
+                                        if (match) {
+                                            const tickersStr = match[1].trim();
+                                            failedTickers = tickersStr.split(',').map(t => t.trim()).filter(t => t);
+                                        }
+                                    }
+                                    // Also check for "No valid tickers to process" message which includes failed tickers
+                                    if (log.includes('❌ No valid tickers to process') && log.includes('Claude API failed')) {
+                                        // Extract tickers from the "Unknown or unsupported tickers" log if available
+                                        // This will be set by the unknownTickersLog check above
+                                    }
+                                }
+                                
+                                // Display warning if tickers were not found
+                                if (tickerFilterLog || unknownTickersLog || claudeApiFailed) {
+                                    const warningDiv = document.createElement('div');
+                                    warningDiv.style.cssText = 'background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 12px; margin-top: 12px; margin-bottom: 12px;';
+                                    
+                                    if (tickerFilterLog && tickerFilterLog.matched === 0 && claudeApiFailed) {
+                                        // All tickers invalid AND Claude API failed
+                                        // Use unknownTickersLog if failedTickers is empty (fallback)
+                                        const tickerList = failedTickers.length > 0 ? failedTickers.join(', ') : 
+                                                          (unknownTickersLog && unknownTickersLog.length > 0 ? unknownTickersLog.join(', ') : 'the requested ticker(s)');
+                                        warningDiv.innerHTML = `
+                                            <div style="color: #856404; font-weight: 600; margin-bottom: 4px;">⚠️ Could Not Fetch Ticker Information</div>
+                                            <div style="color: #856404; font-size: 0.9em;">
+                                                The ticker(s) <strong>${tickerList}</strong> were not found in the stock list, and the system was unable to fetch their information from Claude API (network error or API unavailable). 
+                                                Please check your network connection and try again, or add the ticker manually to stocks.json.
+                                            </div>
+                                        `;
+                                    } else if (tickerFilterLog && tickerFilterLog.matched === 0) {
+                                        // All tickers invalid (but Claude API might not have been tried)
+                                        warningDiv.innerHTML = `
+                                            <div style="color: #856404; font-weight: 600; margin-bottom: 4px;">⚠️ No Valid Tickers Found</div>
+                                            <div style="color: #856404; font-size: 0.9em;">None of the tickers you entered were found in the stock list. Please check the ticker symbols and try again.</div>
+                                        `;
+                                } else if (unknownTickersLog && unknownTickersLog.length > 0) {
+                                    // Some tickers invalid
+                                    const tickerList = unknownTickersLog.join(', ');
+                                    warningDiv.innerHTML = `
+                                        <div style="color: #856404; font-weight: 600; margin-bottom: 4px;">⚠️ ${unknownTickersLog.length} Ticker(s) Not Found</div>
+                                        <div style="color: #856404; font-size: 0.9em;">The following ticker(s) were not found in the stock list: <strong>${tickerList}</strong>. They were skipped from the analysis.</div>
+                                    `;
+                                } else if (tickerFilterLog && tickerFilterLog.matched < tickerFilterLog.requested) {
+                                    // Some tickers didn't match (fallback if unknown tickers log format changes)
+                                    const missingCount = tickerFilterLog.requested - tickerFilterLog.matched;
+                                    warningDiv.innerHTML = `
+                                        <div style="color: #856404; font-weight: 600; margin-bottom: 4px;">⚠️ ${missingCount} Ticker(s) Not Found</div>
+                                        <div style="color: #856404; font-size: 0.9em;">Some of the tickers you entered were not found in the stock list and were skipped from the analysis.</div>
+                                    `;
+                                }
+                                
+                                if (warningDiv.innerHTML) {
+                                    logsContent.appendChild(warningDiv);
+                                }
+                            }
                         }
                         
                         // Display results
@@ -3492,6 +4063,23 @@
 
         // In-memory cache for AI opinions (key: ticker+bearishDate+targetDate)
         const aiOpinionCache = {};
+
+        function extractStrategyFitScore(explanation) {
+            if (!explanation || typeof explanation !== 'string') return null;
+            try {
+                // Look for "Strategy Fit Score: X" (X can be int or float)
+                const match = explanation.match(/Strategy Fit Score:\s*([0-9]+(?:\.[0-9]+)?)/i);
+                if (match && match[1]) {
+                    const val = parseFloat(match[1]);
+                    if (!isNaN(val) && val >= 0 && val <= 10) {
+                        return val;
+                    }
+                }
+            } catch (e) {
+                console.log('Could not extract Strategy Fit Score from explanation');
+            }
+            return null;
+        }
         
         function loadAIOpinionScore(ticker, bearishDate, targetDate, stockData) {
             const aiOpinionCell = document.getElementById(`ai-opinion-${ticker}`);
@@ -3504,7 +4092,9 @@
             const cacheKey = `${ticker}_${bearishDate}_${targetDate}`;
             if (aiOpinionCache[cacheKey]) {
                 const cached = aiOpinionCache[cacheKey];
-                displayAIOpinionScore(aiOpinionCell, ticker, bearishDate, targetDate, cached.score, cached.explanation);
+                const strategyScore = typeof cached.strategyScore === 'number' ? cached.strategyScore : extractStrategyFitScore(cached.explanation || '');
+                const recoveryScore = typeof cached.recoveryScore === 'number' ? cached.recoveryScore : cached.score;
+                displayAIOpinionScore(aiOpinionCell, ticker, bearishDate, targetDate, strategyScore, recoveryScore, cached.explanation);
                 return;
             }
             
@@ -3545,19 +4135,23 @@
                     return;
                 }
                 
-                const score = data.score;
+                const score = data.score; // Recovery score
                 const explanation = data.explanation || '';
+                const strategyScore = extractStrategyFitScore(explanation);
+                const recoveryScore = score;
                 
-                if (score && score >= 1 && score <= 10) {
+                if (recoveryScore && recoveryScore >= 1 && recoveryScore <= 10) {
                     // Cache the result (both score and explanation)
                     aiOpinionCache[cacheKey] = {
-                        score: score,
+                        score: recoveryScore,               // keep for backward compatibility
+                        strategyScore: strategyScore,       // may be null if not found
+                        recoveryScore: recoveryScore,
                         explanation: explanation,
                         timestamp: Date.now()
                     };
                     
-                    // Display score (explanation is cached and ready for button click)
-                    displayAIOpinionScore(aiOpinionCell, ticker, bearishDate, targetDate, score, explanation);
+                    // Display scores (explanation is cached and ready for button click)
+                    displayAIOpinionScore(aiOpinionCell, ticker, bearishDate, targetDate, strategyScore, recoveryScore, explanation);
                 } else {
                     aiOpinionCell.innerHTML = `<div style="color: #e74c3c; font-size: 0.75em;">❌ Invalid score</div>`;
                 }
@@ -3568,22 +4162,39 @@
             });
         }
         
-        function displayAIOpinionScore(cell, ticker, bearishDate, targetDate, score, explanation) {
-            // Determine color based on score
-            let scoreColor = '#e74c3c'; // Red for 1-4
-            if (score >= 8) {
-                scoreColor = '#27ae60'; // Green for 8-10
-            } else if (score >= 5) {
-                scoreColor = '#f39c12'; // Yellow for 5-7
+        function displayAIOpinionScore(cell, ticker, bearishDate, targetDate, strategyScore, recoveryScore, explanation) {
+            // Determine color based on score (shared logic)
+            function getScoreColor(score) {
+                if (typeof score !== 'number' || isNaN(score)) return '#7f8c8d';
+                if (score >= 8) return '#27ae60';      // Green for 8-10
+                if (score >= 5) return '#f39c12';      // Yellow for 5-7
+                return '#e74c3c';                      // Red for 1-4
             }
+            
+            const strategyColor = getScoreColor(strategyScore);
+            const recoveryColor = getScoreColor(recoveryScore);
+            
+            const strategyDisplay = (typeof strategyScore === 'number' && !isNaN(strategyScore))
+                ? `${strategyScore}`
+                : '–';
+            
+            const recoveryDisplay = (typeof recoveryScore === 'number' && !isNaN(recoveryScore))
+                ? `${recoveryScore}`
+                : '–';
             
             // Display score with explanation button
             cell.innerHTML = `
-                <div style="margin-bottom: 3px; margin-top: -23px;">
-                    <span style="font-size: 1.2em; font-weight: 700; color: ${scoreColor};">${score}</span>
+                <div style="margin-bottom: 2px; margin-top: -23px;">
+                    <div style="font-size: 0.7em; color: #95a5a6; margin-bottom: 1px;">Strategy Fit Score</div>
+                    <span style="font-size: 1.05em; font-weight: 700; color: ${strategyColor};">${strategyDisplay}</span>
                     <span style="font-size: 0.7em; color: #95a5a6; margin-left: 2px;">/10</span>
                 </div>
-                <button onclick="loadAIOpinionExplanation('${ticker}', '${bearishDate}', '${targetDate}', ${score})" 
+                <div style="margin-bottom: 4px;">
+                    <div style="font-size: 0.7em; color: #95a5a6; margin-bottom: 1px;">Recovery Score</div>
+                    <span style="font-size: 1.05em; font-weight: 700; color: ${recoveryColor};">${recoveryDisplay}</span>
+                    <span style="font-size: 0.7em; color: #95a5a6; margin-left: 2px;">/10</span>
+                </div>
+                <button onclick="loadAIOpinionExplanation('${ticker}', '${bearishDate}', '${targetDate}', ${recoveryDisplay === '–' ? 'null' : recoveryDisplay})" 
                         style="padding: 6px 12px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em; font-weight: 500; line-height: 1.2; width: 100px;">
                     📖 Explanation
                 </button>
@@ -3639,17 +4250,21 @@
                 // Use the score and explanation from API
                 const score = (data.score && data.score >= 1 && data.score <= 10) ? data.score : cachedScore;
                 const explanation = data.explanation || 'No explanation available.';
+                const strategyScore = extractStrategyFitScore(explanation);
+                const recoveryScore = score;
                 
                 // Update cache
                 aiOpinionCache[cacheKey] = {
-                    score: score,
+                    score: recoveryScore,
+                    strategyScore: strategyScore,
+                    recoveryScore: recoveryScore,
                     explanation: explanation,
                     timestamp: Date.now()
                 };
                 
                 // If the score is different from cached, update the table display too
                 if (score !== cachedScore) {
-                    displayAIOpinionScore(aiOpinionCell, ticker, bearishDate, targetDate, score, explanation);
+                    displayAIOpinionScore(aiOpinionCell, ticker, bearishDate, targetDate, strategyScore, recoveryScore, explanation);
                 }
                 
                 // Show modal with explanation
@@ -3703,17 +4318,77 @@
             
             const escapedExplanation = escapeHtml(formattedExplanation);
             
-            // Convert newlines to <br> tags and format lists
-            let htmlExplanation = escapedExplanation
-                .replace(/\n\n+/g, '</p><p>')  // Double newlines become paragraphs
-                .replace(/\n/g, '<br>')        // Single newlines become line breaks
-                .replace(/^(.+)$/, '<p>$1</p>'); // Wrap in paragraph if not already
+            // Enhanced formatting for structured explanation
+            let htmlExplanation = escapedExplanation;
             
-            // Format numbered lists (1., 2., etc.) - make entire title bold
-            htmlExplanation = htmlExplanation.replace(/(\d+)\.\s+([^<:]+:)/g, '<strong>$1. $2</strong>');
+            // Split by main numbered sections first
+            const sections = htmlExplanation.split(/(\d+\.\s+[A-Z][^:]+:)/);
             
-            // Format bullet points (- or •) with left padding for better alignment
-            htmlExplanation = htmlExplanation.replace(/[-•]\s+([^<]+)/g, '<div style="margin-left: 20px; margin-top: 4px;">• $1</div>');
+            if (sections.length > 1) {
+                // Process each section
+                let formattedSections = [];
+                for (let i = 0; i < sections.length; i++) {
+                    let section = sections[i];
+                    
+                    // Format main section headers (1. STRATEGY FIT EVALUATION:, etc.)
+                    if (section.match(/^\d+\.\s+[A-Z][^:]+:$/)) {
+                        formattedSections.push(`<div style="margin-top: ${i > 0 ? '28px' : '0'}; margin-bottom: 16px;"><strong style="font-size: 1.15em; color: #2c3e50; font-weight: 700;">${section}</strong></div>`);
+                    } else if (section.trim()) {
+                        // Process content within section
+                        let formattedContent = section;
+                        
+                        // Format sub-items with dashes (- Strategy Fit Score:, etc.)
+                        formattedContent = formattedContent.replace(/\n\s*-\s+([^:]+:)\s*([^\n*]+(?:\n(?!\s*[-*]))*)/g, (match, label, value) => {
+                            return `<div style="margin-top: 14px; margin-left: 8px;"><strong style="color: #34495e; font-weight: 600;">- ${label}</strong> ${value.trim()}</div>`;
+                        });
+                        
+                        // Format bullet points with asterisks (* Market Cap:, etc.) - nested items
+                        formattedContent = formattedContent.replace(/\n\s*\*\s+([^:]+:)\s*([^\n]+)/g, (match, label, value) => {
+                            return `<div style="margin-top: 10px; margin-left: 32px; padding-left: 12px; border-left: 3px solid #e0e0e0;"><strong style="color: #555;">• ${label}</strong> ${value.trim()}</div>`;
+                        });
+                        
+                        // Format regular bullet points (without colons) - for lists (like section 3)
+                        formattedContent = formattedContent.replace(/\n\s*\*\s+([^\n]+)/g, (match, text) => {
+                            return `<div style="margin-top: 12px; margin-left: 24px; padding-left: 12px; border-left: 3px solid #e0e0e0; line-height: 1.6;"><span style="color: #555;">•</span> <span style="color: #2c3e50;">${text.trim()}</span></div>`;
+                        });
+                        
+                        // Also handle bullet points that might start with "-" instead of "*" in section 3
+                        formattedContent = formattedContent.replace(/\n\s*-\s+([^\n]+)(?![^:]*:)/g, (match, text) => {
+                            // Only match if it doesn't have a colon (to avoid matching "- Label: value" patterns)
+                            return `<div style="margin-top: 12px; margin-left: 24px; padding-left: 12px; border-left: 3px solid #e0e0e0; line-height: 1.6;"><span style="color: #555;">•</span> <span style="color: #2c3e50;">${text.trim()}</span></div>`;
+                        });
+                        
+                        // Convert remaining newlines to line breaks
+                        formattedContent = formattedContent.replace(/\n/g, '<br>');
+                        
+                        // Wrap section content in a container for consistent spacing
+                        formattedSections.push(`<div style="margin-top: 8px; margin-bottom: 8px;">${formattedContent}</div>`);
+                    }
+                }
+                htmlExplanation = formattedSections.join('');
+            } else {
+                // Fallback: if structure doesn't match, use simpler formatting
+                // Format numbered sections
+                htmlExplanation = htmlExplanation.replace(/(\d+)\.\s+([A-Z][^:]+:)/g, '<div style="margin-top: 24px; margin-bottom: 12px;"><strong style="font-size: 1.1em; color: #2c3e50;">$1. $2</strong></div>');
+                
+                // Format sub-items with dashes
+                htmlExplanation = htmlExplanation.replace(/\n\s*-\s+([^:]+:)\s*([^\n*]+)/g, '<div style="margin-top: 12px; margin-left: 8px;"><strong style="color: #34495e;">- $1</strong> $2</div>');
+                
+                // Format bullet points with asterisks
+                htmlExplanation = htmlExplanation.replace(/\n\s*\*\s+([^:]+:)\s*([^\n]+)/g, '<div style="margin-top: 8px; margin-left: 32px; padding-left: 12px; border-left: 3px solid #e0e0e0;"><strong style="color: #555;">• $1</strong> $2</div>');
+                
+                // Format regular bullet points
+                htmlExplanation = htmlExplanation.replace(/\n\s*\*\s+([^\n]+)/g, '<div style="margin-top: 6px; margin-left: 32px; padding-left: 12px; border-left: 3px solid #e0e0e0;">• $1</div>');
+                
+                // Convert remaining newlines
+                htmlExplanation = htmlExplanation.replace(/\n/g, '<br>');
+            }
+            
+            // Clean up any excessive spacing
+            htmlExplanation = htmlExplanation.replace(/(<br>\s*){3,}/g, '<br><br>');
+            
+            // Wrap in container
+            htmlExplanation = '<div style="line-height: 1.7;">' + htmlExplanation + '</div>';
             
             // Create or get modal overlay
             let modalOverlay = document.getElementById('ai-opinion-modal-overlay');
@@ -3777,21 +4452,26 @@
         }
         
         function showRecoveryHistoryModal(ticker, recoveryHistoryId) {
-            // Retrieve recovery history from global storage
+            // Retrieve recovery history and events from global storage
             if (!window.recoveryHistoryData || !window.recoveryHistoryData[recoveryHistoryId]) {
                 alert('Error loading recovery history. Please try again.');
                 return;
             }
             
-            const recoveryHistory = window.recoveryHistoryData[recoveryHistoryId];
+            const storedData = window.recoveryHistoryData[recoveryHistoryId];
+            // Handle both old format (just array) and new format (object with recoveryHistory and events)
+            const recoveryHistory = Array.isArray(storedData) ? storedData : (storedData.recoveryHistory || []);
+            const allEvents = Array.isArray(storedData) ? [] : (storedData.events || []);
+            
+            // console.log(`[FRONTEND] showRecoveryHistoryModal(${ticker}): Retrieved ${recoveryHistory.length} recovery items, ${allEvents.length} events`);
             
             if (!recoveryHistory || !Array.isArray(recoveryHistory) || recoveryHistory.length === 0) {
                 alert('No recovery history available.');
                 return;
             }
             
-            // Format all recovery history items
-            const historyItems = recoveryHistory.map(item => formatRecoveryHistoryItem(item)).join('');
+            // Format all recovery history items, passing events for matching
+            const historyItems = recoveryHistory.map(item => formatRecoveryHistoryItem(item, allEvents)).join('');
             
             // Create or get modal overlay
             let modalOverlay = document.getElementById('recovery-history-modal-overlay');
@@ -3807,28 +4487,361 @@
                 document.body.appendChild(modalOverlay);
             }
             
-            // Create modal content
+            // Get bearish_date and target_date from stored data
+            const bearishDate = storedData.bearish_date || null;
+            const targetDate = storedData.target_date || null;
+            
+            // Create modal content with draggable positioning and two-column layout
             const modalContent = document.createElement('div');
-            modalContent.style.cssText = 'background: white; border-radius: 8px; padding: 30px; max-width: 600px; max-height: 80vh; overflow-y: auto; position: relative; box-shadow: 0 4px 20px rgba(0,0,0,0.3);';
+            modalContent.id = 'recovery-history-modal-content';
+            modalContent.style.cssText = 'background: white; border-radius: 8px; padding: 0; width: 95vw; max-width: 1800px; min-width: 800px; height: 90vh; max-height: 95vh; min-height: 500px; overflow: hidden; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); box-shadow: 0 4px 20px rgba(0,0,0,0.3); display: flex; flex-direction: column;';
             modalContent.onclick = function(e) {
                 e.stopPropagation();
             };
             
-            modalContent.innerHTML = `
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid #e0e0e0; padding-bottom: 15px;">
-                    <h2 style="margin: 0; color: #2c3e50; font-size: 1.5em;">Recovery History - ${ticker}</h2>
-                    <button onclick="closeRecoveryHistoryModal()" style="background: none; border: none; font-size: 1.5em; cursor: pointer; color: #95a5a6; padding: 0; width: 30px; height: 30px;">&times;</button>
-                </div>
+            // Add resize handles
+            const resizeHandles = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+            resizeHandles.forEach(direction => {
+                const handle = document.createElement('div');
+                handle.className = `recovery-modal-resize-handle recovery-modal-resize-handle-${direction}`;
+                handle.style.cssText = `
+                    position: absolute;
+                    background: transparent;
+                    z-index: 10001;
+                `;
+                
+                if (direction === 'n' || direction === 's') {
+                    handle.style.left = '0';
+                    handle.style.right = '0';
+                    handle.style.height = '5px';
+                    if (direction === 'n') handle.style.top = '0';
+                    if (direction === 's') handle.style.bottom = '0';
+                    handle.style.cursor = 'ns-resize';
+                } else if (direction === 'e' || direction === 'w') {
+                    handle.style.top = '0';
+                    handle.style.bottom = '0';
+                    handle.style.width = '5px';
+                    if (direction === 'e') handle.style.right = '0';
+                    if (direction === 'w') handle.style.left = '0';
+                    handle.style.cursor = 'ew-resize';
+                } else {
+                    handle.style.width = '10px';
+                    handle.style.height = '10px';
+                    if (direction.includes('n')) handle.style.top = '0';
+                    if (direction.includes('s')) handle.style.bottom = '0';
+                    if (direction.includes('e')) handle.style.right = '0';
+                    if (direction.includes('w')) handle.style.left = '0';
+                    if (direction === 'ne') handle.style.cursor = 'nesw-resize';
+                    if (direction === 'nw') handle.style.cursor = 'nwse-resize';
+                    if (direction === 'se') handle.style.cursor = 'nwse-resize';
+                    if (direction === 'sw') handle.style.cursor = 'nesw-resize';
+                }
+                
+                modalContent.appendChild(handle);
+            });
+            
+            // Make modal draggable
+            let isModalDragging = false;
+            let modalDragStartX = 0;
+            let modalDragStartY = 0;
+            let modalInitialX = 0;
+            let modalInitialY = 0;
+            
+            const modalHeader = document.createElement('div');
+            modalHeader.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 20px 30px; border-bottom: 2px solid #e0e0e0; cursor: move; user-select: none; background: #f8f9fa;';
+            modalHeader.innerHTML = `
+                <h2 style="margin: 0; color: #2c3e50; font-size: 1.5em; pointer-events: none;">Recovery History - ${ticker}</h2>
+                <button onclick="closeRecoveryHistoryModal()" style="background: none; border: none; font-size: 1.5em; cursor: pointer; color: #95a5a6; padding: 0; width: 30px; height: 30px; z-index: 10001;">&times;</button>
+            `;
+            
+            // Resize functionality variables
+            let isModalResizing = false;
+            let modalResizeDirection = '';
+            let modalResizeStartX = 0;
+            let modalResizeStartY = 0;
+            let modalResizeInitialX = 0;
+            let modalResizeInitialY = 0;
+            let modalResizeInitialWidth = 0;
+            let modalResizeInitialHeight = 0;
+            
+            // Drag functionality for modal header - use closure to avoid duplicate listeners
+            const handleMouseMove = function(e) {
+                if (isModalDragging && modalContent.parentNode) {
+                    const deltaX = e.clientX - modalDragStartX;
+                    const deltaY = e.clientY - modalDragStartY;
+                    let newX = modalInitialX + deltaX;
+                    let newY = modalInitialY + deltaY;
+                    
+                    // Constrain to viewport
+                    const maxX = window.innerWidth - modalContent.offsetWidth;
+                    const maxY = window.innerHeight - modalContent.offsetHeight;
+                    newX = Math.max(0, Math.min(newX, maxX));
+                    newY = Math.max(0, Math.min(newY, maxY));
+                    
+                    modalContent.style.left = newX + 'px';
+                    modalContent.style.top = newY + 'px';
+                    modalContent.style.transform = 'none'; // Remove centering transform
+                } else if (isModalResizing && modalContent.parentNode) {
+                    const deltaX = e.clientX - modalResizeStartX;
+                    const deltaY = e.clientY - modalResizeStartY;
+                    
+                    let newWidth = modalResizeInitialWidth;
+                    let newHeight = modalResizeInitialHeight;
+                    let newX = modalResizeInitialX;
+                    let newY = modalResizeInitialY;
+                    
+                    // Handle different resize directions
+                    if (modalResizeDirection.includes('e')) {
+                        newWidth = modalResizeInitialWidth + deltaX;
+                    }
+                    if (modalResizeDirection.includes('w')) {
+                        newWidth = modalResizeInitialWidth - deltaX;
+                        newX = modalResizeInitialX + deltaX;
+                    }
+                    if (modalResizeDirection.includes('s')) {
+                        newHeight = modalResizeInitialHeight + deltaY;
+                    }
+                    if (modalResizeDirection.includes('n')) {
+                        newHeight = modalResizeInitialHeight - deltaY;
+                        newY = modalResizeInitialY + deltaY;
+                    }
+                    
+                    // Apply constraints
+                    const minWidth = 800;
+                    const minHeight = 500;
+                    const maxWidth = window.innerWidth;
+                    const maxHeight = window.innerHeight;
+                    
+                    newWidth = Math.max(minWidth, Math.min(newWidth, maxWidth));
+                    newHeight = Math.max(minHeight, Math.min(newHeight, maxHeight));
+                    
+                    // Adjust position for west and north resizing
+                    if (modalResizeDirection.includes('w')) {
+                        const widthDelta = newWidth - modalResizeInitialWidth;
+                        newX = modalResizeInitialX - widthDelta;
+                        if (newX < 0) {
+                            newWidth += newX;
+                            newX = 0;
+                        }
+                    }
+                    if (modalResizeDirection.includes('n')) {
+                        const heightDelta = newHeight - modalResizeInitialHeight;
+                        newY = modalResizeInitialY - heightDelta;
+                        if (newY < 0) {
+                            newHeight += newY;
+                            newY = 0;
+                        }
+                    }
+                    
+                    modalContent.style.width = newWidth + 'px';
+                    modalContent.style.height = newHeight + 'px';
+                    if (modalResizeDirection.includes('w')) {
+                        modalContent.style.left = newX + 'px';
+                    }
+                    if (modalResizeDirection.includes('n')) {
+                        modalContent.style.top = newY + 'px';
+                    }
+                }
+            };
+            
+            const handleMouseUp = function() {
+                isModalDragging = false;
+                isModalResizing = false;
+                modalResizeDirection = '';
+            };
+            
+            modalHeader.addEventListener('mousedown', function(e) {
+                if (e.target.tagName === 'BUTTON') return; // Don't drag when clicking close button
+                isModalDragging = true;
+                modalDragStartX = e.clientX;
+                modalDragStartY = e.clientY;
+                const rect = modalContent.getBoundingClientRect();
+                modalInitialX = rect.left;
+                modalInitialY = rect.top;
+                e.preventDefault();
+                
+                // Add listeners only when dragging starts
+                document.addEventListener('mousemove', handleMouseMove);
+                document.addEventListener('mouseup', handleMouseUp);
+            });
+            
+            // Store cleanup function on modal content for cleanup on close
+            modalContent._cleanupDrag = function() {
+                document.removeEventListener('mousemove', handleMouseMove);
+                document.removeEventListener('mouseup', handleMouseUp);
+                isModalDragging = false;
+                isModalResizing = false;
+            };
+            
+            // Combine cleanup functions
+            const originalCleanup = modalContent._cleanupDrag;
+            modalContent._cleanupDrag = function() {
+                if (originalCleanup) originalCleanup();
+                if (modalContent._cleanupDivider) modalContent._cleanupDivider();
+            };
+            
+            // Create two-column layout container with resizable divider
+            const modalBodyContainer = document.createElement('div');
+            modalBodyContainer.style.cssText = 'display: flex; flex: 1; overflow: hidden; position: relative;';
+            
+            // Left column: Recovery History (resizable)
+            const modalBodyLeft = document.createElement('div');
+            modalBodyLeft.id = 'recovery-history-left-panel';
+            modalBodyLeft.style.cssText = 'width: 35%; min-width: 300px; max-width: 80%; padding: 30px; overflow-y: auto; border-right: 2px solid #e0e0e0; flex-shrink: 0;';
+            modalBodyLeft.innerHTML = `
                 <div style="margin-bottom: 20px;">
                     <div style="font-size: 0.9em; color: #666; margin-bottom: 12px; font-weight: 600;">Historical Similar Drops:</div>
                     <div style="line-height: 1.8; color: #2c3e50; font-size: 0.95em; background: #f8f9fa; padding: 20px; border-radius: 6px; border-left: 4px solid #667eea;">
-                        ${historyItems}
+${historyItems}
                     </div>
                 </div>
-                <div style="text-align: right; margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
-                    <button onclick="closeRecoveryHistoryModal()" style="padding: 8px 20px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">Close</button>
-                </div>
             `;
+            
+            // Resizable divider
+            const divider = document.createElement('div');
+            divider.id = 'recovery-history-divider';
+            divider.style.cssText = `
+                width: 10px;
+                background: #667eea;
+                cursor: col-resize;
+                position: relative;
+                flex-shrink: 0;
+                z-index: 10;
+                transition: background 0.2s;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            `;
+            // Add visual indicator (dots) to show it's draggable
+            const dividerIndicator = document.createElement('div');
+            dividerIndicator.style.cssText = `
+                width: 4px;
+                height: 40px;
+                display: flex;
+                flex-direction: column;
+                justify-content: space-around;
+                align-items: center;
+            `;
+            // Add three dots
+            for (let i = 0; i < 3; i++) {
+                const dot = document.createElement('div');
+                dot.style.cssText = `
+                    width: 3px;
+                    height: 3px;
+                    background: rgba(255, 255, 255, 0.6);
+                    border-radius: 50%;
+                `;
+                dividerIndicator.appendChild(dot);
+            }
+            divider.appendChild(dividerIndicator);
+            
+            divider.addEventListener('mouseenter', function() {
+                this.style.background = '#4a5fd4';
+            });
+            divider.addEventListener('mouseleave', function() {
+                this.style.background = '#667eea';
+            });
+            
+            // Right column: TradingView Chart (resizable)
+            const modalBodyRight = document.createElement('div');
+            modalBodyRight.id = 'recovery-history-right-panel';
+            modalBodyRight.style.cssText = 'flex: 1; min-width: 400px; height: 100%; position: relative; background: #1e1e1e; overflow: hidden;';
+            
+            // Build chart URL
+            let chartUrl = `/chart?symbol=${encodeURIComponent(ticker)}`;
+            if (bearishDate) {
+                chartUrl += `&bearish_date=${encodeURIComponent(bearishDate)}`;
+            }
+            if (targetDate) {
+                chartUrl += `&target_date=${encodeURIComponent(targetDate)}`;
+            }
+            
+            const chartIframe = document.createElement('iframe');
+            chartIframe.src = chartUrl;
+            chartIframe.style.cssText = 'width: 100%; height: 100%; border: none; background: #1e1e1e;';
+            chartIframe.setAttribute('frameborder', '0');
+            
+            modalBodyRight.appendChild(chartIframe);
+            
+            // Resize functionality for divider
+            let isDividerResizing = false;
+            let dividerStartX = 0;
+            let dividerStartLeftWidth = 0;
+            
+            divider.addEventListener('mousedown', function(e) {
+                isDividerResizing = true;
+                dividerStartX = e.clientX;
+                dividerStartLeftWidth = modalBodyLeft.offsetWidth;
+                e.preventDefault();
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+            });
+            
+            const handleDividerMouseMove = function(e) {
+                if (isDividerResizing) {
+                    const deltaX = e.clientX - dividerStartX;
+                    const containerWidth = modalBodyContainer.offsetWidth;
+                    const newLeftWidth = dividerStartLeftWidth + deltaX;
+                    const minLeftWidth = 300;
+                    const maxLeftWidth = containerWidth * 0.8;
+                    const minRightWidth = 400;
+                    
+                    // Constrain the left panel width
+                    const constrainedLeftWidth = Math.max(minLeftWidth, Math.min(newLeftWidth, maxLeftWidth));
+                    const rightWidth = containerWidth - constrainedLeftWidth - divider.offsetWidth;
+                    
+                    // Only resize if right panel doesn't go below minimum
+                    if (rightWidth >= minRightWidth) {
+                        modalBodyLeft.style.width = constrainedLeftWidth + 'px';
+                    }
+                }
+            };
+            
+            const handleDividerMouseUp = function() {
+                isDividerResizing = false;
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            };
+            
+            document.addEventListener('mousemove', handleDividerMouseMove);
+            document.addEventListener('mouseup', handleDividerMouseUp);
+            
+            // Store cleanup for divider
+            modalContent._cleanupDivider = function() {
+                document.removeEventListener('mousemove', handleDividerMouseMove);
+                document.removeEventListener('mouseup', handleDividerMouseUp);
+            };
+            
+            // Assemble modal structure
+            modalBodyContainer.appendChild(modalBodyLeft);
+            modalBodyContainer.appendChild(divider);
+            modalBodyContainer.appendChild(modalBodyRight);
+            
+            modalContent.appendChild(modalHeader);
+            modalContent.appendChild(modalBodyContainer);
+            
+            // Add resize functionality to resize handles (after modal is assembled)
+            const recoveryResizeHandles = modalContent.querySelectorAll('.recovery-modal-resize-handle');
+            recoveryResizeHandles.forEach(handle => {
+                handle.addEventListener('mousedown', function(e) {
+                    isModalResizing = true;
+                    const classList = Array.from(handle.classList);
+                    modalResizeDirection = classList.find(c => c.startsWith('recovery-modal-resize-handle-'))?.replace('recovery-modal-resize-handle-', '') || '';
+                    modalResizeStartX = e.clientX;
+                    modalResizeStartY = e.clientY;
+                    const rect = modalContent.getBoundingClientRect();
+                    modalResizeInitialX = rect.left;
+                    modalResizeInitialY = rect.top;
+                    modalResizeInitialWidth = rect.width;
+                    modalResizeInitialHeight = rect.height;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    // Add listeners only when resizing starts
+                    document.addEventListener('mousemove', handleMouseMove);
+                    document.addEventListener('mouseup', handleMouseUp);
+                });
+            });
             
             modalOverlay.innerHTML = '';
             modalOverlay.appendChild(modalContent);
@@ -3837,6 +4850,17 @@
         
         function closeRecoveryHistoryModal() {
             const modalOverlay = document.getElementById('recovery-history-modal-overlay');
+            const modalContent = document.getElementById('recovery-history-modal-content');
+            
+            // Clean up drag and resize event listeners if they exist
+            if (modalContent && modalContent._cleanupDrag) {
+                modalContent._cleanupDrag();
+            }
+            
+            // Reset body cursor and user-select
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            
             if (modalOverlay) {
                 modalOverlay.style.display = 'none';
             }
@@ -3908,6 +4932,7 @@
                 return '<span style="color: #95a5a6;">None</span>';
             }
             
+            // events_during is already filtered in backend to only include events between bearish_date and target_date
             const events = earningsData.events_during.slice(0, 3); // Show max 3 events
             return events.map(event => {
                 const eventIcon = event.type === 'earnings' ? '💰' : '💵';
@@ -3932,11 +4957,12 @@
             }).join('');
         }
 
-        function formatRecoveryHistoryItem(item) {
+        function formatRecoveryHistoryItem(item, allEvents = []) {
             // Helper function to format a single recovery history item
             const dropDate = item.drop_date || '';
             const dropPct = item.drop_pct !== null && item.drop_pct !== undefined ? item.drop_pct : 0;
-            const recoveryDays = item.recovery_days;
+            const recoveryTradingDays = item.recovery_trading_days; // Use trading days instead of calendar days
+            const recoveryDays = item.recovery_days; // Keep for fallback
             const recoveryDate = item.recovery_date;
             const recoveryPct = item.recovery_pct;
             
@@ -3949,7 +4975,67 @@
                 // Keep original format if parsing fails
             }
             
-            if (recoveryDays !== null && recoveryDays !== undefined && recoveryDate && recoveryPct !== null && recoveryPct !== undefined) {
+            // Use trading days if available, otherwise fall back to calendar days
+            const daysToShow = recoveryTradingDays !== null && recoveryTradingDays !== undefined 
+                ? recoveryTradingDays 
+                : recoveryDays;
+            
+            // Check if any event occurred within 21 calendar days of drop date
+            // Only show for drops that didn't recover within 7 trading days
+            let eventDisplay = '';
+            const shouldShowEvent = recoveryTradingDays === null || recoveryTradingDays === undefined || recoveryTradingDays > 7;
+            
+            if (shouldShowEvent && allEvents && allEvents.length > 0) {
+                try {
+                    const dropDateObj = new Date(dropDate + 'T00:00:00');
+                    const eventWindowEnd = new Date(dropDateObj);
+                    eventWindowEnd.setDate(eventWindowEnd.getDate() + 21);
+                    
+                    // Find closest event within 21 calendar days after drop date (including same day)
+                    let closestEvent = null;
+                    let minDaysDiff = null;
+                    
+                    for (const event of allEvents) {
+                        const eventDateStr = event.date || '';
+                        if (!eventDateStr) continue;
+                        
+                        try {
+                            const eventDateObj = new Date(eventDateStr + 'T00:00:00');
+                            // Event must be on or after drop date and within 21 calendar days
+                            if (eventDateObj >= dropDateObj && eventDateObj <= eventWindowEnd) {
+                                const daysDiff = Math.floor((eventDateObj - dropDateObj) / (1000 * 60 * 60 * 24));
+                                if (minDaysDiff === null || daysDiff < minDaysDiff) {
+                                    minDaysDiff = daysDiff;
+                                    closestEvent = event;
+                                }
+                            }
+                        } catch (e) {
+                            // Skip invalid dates
+                            continue;
+                        }
+                    }
+                    
+                    if (closestEvent) {
+                        let eventDateStr = closestEvent.date || '';
+                        try {
+                            const eventDateObj = new Date(closestEvent.date + 'T00:00:00');
+                            eventDateStr = eventDateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                        } catch (e) {
+                            // Keep original format if parsing fails
+                        }
+                        
+                        const eventName = closestEvent.name || 'Event';
+                        const eventIcon = closestEvent.type === 'earnings' ? '📅' : '💵';
+                        
+                        eventDisplay = ` <span style="color: #7f8c8d; font-size: 0.85em; margin-left: 8px;">${eventIcon} ${eventName} on ${eventDateStr} (${minDaysDiff} days later)</span>`;
+                    }
+                } catch (e) {
+                    // If event matching fails, continue without event display
+                    console.error(`[FRONTEND] Error matching events for drop ${dropDate}:`, e);
+                }
+            }
+            
+            if (daysToShow !== null && daysToShow !== undefined && recoveryDate && recoveryPct !== null && recoveryPct !== undefined) {
                 // Format recovery date
                 let recoveryDateStr = recoveryDate;
                 try {
@@ -3963,29 +5049,136 @@
                     <span style="color: #2c3e50; font-weight: 500;">${dropDateStr}:</span>
                     <span style="color: #e74c3c; font-weight: 600;">${dropPct.toFixed(1)}%</span>
                     <span style="color: #95a5a6;">→</span>
-                    <span style="color: #3498db; font-weight: 500;">${recoveryDays} days</span>
+                    <span style="color: #3498db; font-weight: 500;">${daysToShow} trading days</span>
                     <span style="color: #95a5a6;">→</span>
                     <span style="color: #2c3e50;">${recoveryDateStr}</span>
-                    <span style="color: #27ae60; font-weight: 600; margin-left: 4px;">+${recoveryPct.toFixed(1)}%</span>
+                    <span style="color: #27ae60; font-weight: 600; margin-left: 4px;">+${recoveryPct.toFixed(1)}%</span>${eventDisplay}
                 </div>`;
             } else {
                 return `<div style="margin-bottom: 4px; font-size: 0.8em;">
                     <span style="color: #2c3e50; font-weight: 500;">${dropDateStr}:</span>
                     <span style="color: #e74c3c; font-weight: 600;">${dropPct.toFixed(1)}%</span>
                     <span style="color: #95a5a6;">→</span>
-                    <span style="color: #e74c3c; font-weight: 500;">No recovery</span>
+                    <span style="color: #e74c3c; font-weight: 500;">No recovery</span>${eventDisplay}
                 </div>`;
             }
         }
 
-        function formatRecoveryHistory(recoveryHistory, ticker) {
+        function formatRecoveryHistory(recoveryHistory, ticker, recoveryHistorySummary = null, allEvents = null, bearishDate = null, targetDate = null) {
+            // Validate that we have complete data before calculating
             if (!recoveryHistory || !Array.isArray(recoveryHistory) || recoveryHistory.length === 0) {
                 return '<span style="color: #95a5a6;">None</span>';
             }
             
-            // Calculate summary statistics
-            // Filter for recoveries within 40 days (for the summary count)
-            const recoveredWithin40Days = recoveryHistory.filter(item => 
+            // Ensure allEvents is an array (even if empty)
+            if (!allEvents || !Array.isArray(allEvents)) {
+                allEvents = [];
+            }
+            
+            // Validate that recovery history items have required fields
+            // Check if data looks complete - all items should have drop_date
+            // Only validate if we have items - empty array is valid
+            const hasCompleteData = recoveryHistory.length === 0 || recoveryHistory.every(item => {
+                return item && item.drop_date && typeof item.drop_date === 'string';
+            });
+            
+            // If data doesn't look complete, wait for full data
+            if (!hasCompleteData) {
+                return '<span style="color: #95a5a6;">Loading...</span>';
+            }
+            
+            // Match events to recovery history items (similar to formatRecoveryHistoryItem)
+            // IMPORTANT: Only match events to drops that didn't recover within 7 trading days
+            // This matches the logic in formatRecoveryHistoryItem where events are only shown for drops that didn't recover quickly
+            const itemsWithEventInfo = recoveryHistory.map(item => {
+                const dropDate = item.drop_date || '';
+                const recoveryTradingDays = item.recovery_trading_days;
+                
+                // Only check for events if the drop didn't recover within 7 trading days
+                // This matches the display logic in formatRecoveryHistoryItem
+                const shouldCheckForEvent = recoveryTradingDays === null || recoveryTradingDays === undefined || recoveryTradingDays > 7;
+                
+                if (!dropDate || !allEvents || allEvents.length === 0 || !shouldCheckForEvent) {
+                    return { ...item, hasEvent: false, matchedEvent: null };
+                }
+                
+                try {
+                    const dropDateObj = new Date(dropDate + 'T00:00:00');
+                    // Validate date was parsed correctly
+                    if (isNaN(dropDateObj.getTime())) {
+                        return { ...item, hasEvent: false, matchedEvent: null };
+                    }
+                    
+                    const eventWindowEnd = new Date(dropDateObj);
+                    eventWindowEnd.setDate(eventWindowEnd.getDate() + 21);
+                    
+                    // Find if any event occurred within 21 calendar days after drop date (including same day)
+                    let matchedEvent = null;
+                    for (const event of allEvents) {
+                        const eventDateStr = event.date || '';
+                        if (!eventDateStr) continue;
+                        
+                        try {
+                            const eventDateObj = new Date(eventDateStr + 'T00:00:00');
+                            // Validate date was parsed correctly
+                            if (isNaN(eventDateObj.getTime())) {
+                                continue;
+                            }
+                            
+                            // Event must be on or after drop date and within 21 calendar days
+                            if (eventDateObj >= dropDateObj && eventDateObj <= eventWindowEnd) {
+                                matchedEvent = { date: eventDateStr, type: event.type, name: event.name };
+                                return { ...item, hasEvent: true, matchedEvent: matchedEvent };
+                            }
+                        } catch (e) {
+                            // Skip invalid dates
+                            continue;
+                        }
+                    }
+                } catch (e) {
+                    // If event matching fails, assume no event
+                }
+                
+                return { ...item, hasEvent: false, matchedEvent: null };
+            });
+            
+            // Filter out drops that have events
+            // Only consider drops WITHOUT events for ALL calculations
+            const dropsWithoutEvents = itemsWithEventInfo.filter(item => {
+                return !item.hasEvent;
+            });
+            
+            // Debug logging to diagnose calculation issues
+            // Debug logging for events filtering (concise)
+            console.log(`[EVENTS DEBUG] ${ticker}: Recovery calculation:`);
+            console.log(`  - Total items: ${recoveryHistory.length}`);
+            console.log(`  - Events available: ${allEvents ? allEvents.length : 0}`);
+            if (allEvents && allEvents.length > 0) {
+                console.log(`  - Event dates:`, allEvents.map(e => e.date || 'no date'));
+            }
+            console.log(`  - Items with events: ${itemsWithEventInfo.filter(i => i.hasEvent).length}`);
+            console.log(`  - Items WITHOUT events: ${dropsWithoutEvents.length} (used for calculations)`);
+            
+            // Use dropsWithoutEvents for ALL calculations (7 days, 40 days, avg recovery, avg days)
+            let totalDrops = dropsWithoutEvents.length;
+            let recoveredCount40 = 0;
+            let recoveryPercent40 = 0;
+            let avgRecoveryPct = 0;
+            let avgDaysToRecover = 0;
+            let recoveredCount7 = 0;
+            let recoveryPercent7 = 0;
+            
+            // Calculate 7 trading days metric (only drops without events)
+            const recoveredWithin7Trading = dropsWithoutEvents.filter(item => 
+                item.recovery_pct !== null && 
+                item.recovery_pct !== undefined && 
+                item.recovery_trading_days !== null && 
+                item.recovery_trading_days !== undefined &&
+                item.recovery_trading_days <= 7
+            );
+            
+            // Calculate 40 calendar days metric (only drops without events)
+            const recoveredWithin40Days = dropsWithoutEvents.filter(item => 
                 item.recovery_pct !== null && 
                 item.recovery_pct !== undefined && 
                 item.recovery_days !== null && 
@@ -3993,54 +5186,92 @@
                 item.recovery_days <= 40
             );
             
-            // Filter for all recoveries (regardless of days) for average days calculation
-            const allRecovered = recoveryHistory.filter(item => 
+            // Calculate average recovery (only drops without events that recovered)
+            const allRecovered = dropsWithoutEvents.filter(item => 
                 item.recovery_pct !== null && 
                 item.recovery_pct !== undefined && 
                 item.recovery_days !== null && 
                 item.recovery_days !== undefined
             );
             
-            const totalDrops = recoveryHistory.length;
-            const recoveredCount = recoveredWithin40Days.length;
-            const recoveryPercent = totalDrops > 0 ? ((recoveredCount / totalDrops) * 100).toFixed(1) : 0;
-            const avgRecoveryPct = recoveredWithin40Days.length > 0 
-                ? (recoveredWithin40Days.reduce((sum, item) => sum + item.recovery_pct, 0) / recoveredWithin40Days.length).toFixed(1)
-                : 0;
-            const avgDaysToRecover = allRecovered.length > 0
-                ? (allRecovered.reduce((sum, item) => sum + item.recovery_days, 0) / allRecovered.length).toFixed(1)
-                : 0;
+            totalDrops = dropsWithoutEvents.length;
+            recoveredCount7 = recoveredWithin7Trading.length;
+            recoveredCount40 = recoveredWithin40Days.length;
+            
+            recoveryPercent7 = totalDrops > 0 ? ((recoveredCount7 / totalDrops) * 100).toFixed(1) : 0;
+            recoveryPercent40 = totalDrops > 0 ? ((recoveredCount40 / totalDrops) * 100).toFixed(1) : 0;
+            
+            // Calculate average recovery from ALL recovered drops (not just within 40 days)
+            // Only calculate if we have recovered drops
+            if (allRecovered.length > 0) {
+                avgRecoveryPct = (allRecovered.reduce((sum, item) => sum + item.recovery_pct, 0) / allRecovered.length).toFixed(1);
+                avgDaysToRecover = (allRecovered.reduce((sum, item) => sum + item.recovery_days, 0) / allRecovered.length).toFixed(1);
+            } else {
+                // No recovered drops - show N/A
+                avgRecoveryPct = 'N/A';
+                avgDaysToRecover = 'N/A';
+            }
             
             // Summary only (no individual items)
             // Use a unique ID for this recovery history to store data
             const recoveryHistoryId = `recovery-history-${ticker}-${Date.now()}`;
             
-            // Store recovery history in a global object accessible by the modal
+            // Store recovery history and events in a global object accessible by the modal
             if (!window.recoveryHistoryData) {
                 window.recoveryHistoryData = {};
             }
-            window.recoveryHistoryData[recoveryHistoryId] = recoveryHistory;
             
-            return `<div style="font-size: 0.9em; color: #2c3e50; line-height: 1.6;">
-                <div style="color: #2c3e50; margin-bottom: 4px; font-weight: 500;">
-                    <span style="color: #27ae60; font-weight: 700; font-size: 1.05em;">${recoveryPercent}%</span> recovered 
-                    <span style="color: #666;">(${recoveredCount}/${totalDrops})</span>
+            // Store both recovery history and events for this ticker, plus dates for chart
+            window.recoveryHistoryData[recoveryHistoryId] = {
+                recoveryHistory: recoveryHistory,
+                events: allEvents || [],
+                bearish_date: bearishDate || null,
+                target_date: targetDate || null,
+                ticker: ticker
+            };
+            
+            return `<div style="font-size: 0.85em; color: #2c3e50; line-height: 1.6; padding: 10px; border-radius: 6px;">
+                <!-- 7 Trading Days -->
+                <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #e0e0e0;">
+                    <div style="display: flex; align-items: baseline; gap: 6px;">
+                        <span style="font-size: 1.3em; font-weight: 700; color: #27ae60;">${recoveryPercent7}%</span>
+                        <span style="font-size: 0.9em; color: #666;">(${recoveredCount7}/${totalDrops})</span>
+                    </div>
+                    <div style="font-size: 0.75em; color: #95a5a6; margin-top: 2px; font-weight: 500;">✓ within 7 trading days</div>
                 </div>
-                <div style="color: #2c3e50; margin-bottom: 6px; font-weight: 500;">
-                    within 40 days
+                
+                <!-- 40 Days -->
+                <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #e0e0e0;">
+                    <div style="display: flex; align-items: baseline; gap: 6px;">
+                        <span style="font-size: 1.3em; font-weight: 700; color: #27ae60;">${recoveryPercent40}%</span>
+                        <span style="font-size: 0.9em; color: #666;">(${recoveredCount40}/${totalDrops})</span>
+                    </div>
+                    <div style="font-size: 0.75em; color: #95a5a6; margin-top: 2px; font-weight: 500;">✓ within 40 days</div>
                 </div>
-                <div style="color: #2c3e50; margin-bottom: 6px; font-weight: 500;">
-                    Avg pricing recovery: <span style="color: #27ae60; font-weight: 700; font-size: 1.05em;">+${avgRecoveryPct}%</span>
+                
+                <!-- Average Metrics -->
+                <div style="display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 0.9em;">
+                    <div>
+                        <span style="color: #95a5a6;">Avg Recovery:</span>
+                        ${avgRecoveryPct === 'N/A' 
+                            ? '<span style="color: #95a5a6; font-weight: 700; margin-left: 4px;">N/A</span>'
+                            : `<span style="color: #27ae60; font-weight: 700; margin-left: 4px;">+${avgRecoveryPct}%</span>`
+                        }
+                    </div>
+                    <div>
+                        <span style="color: #95a5a6;">Avg Days:</span>
+                        ${avgDaysToRecover === 'N/A'
+                            ? '<span style="color: #95a5a6; font-weight: 700; margin-left: 4px;">N/A</span>'
+                            : `<span style="color: #3498db; font-weight: 700; margin-left: 4px;">${avgDaysToRecover}</span>`
+                        }
+                    </div>
                 </div>
-                <div style="color: #2c3e50; margin-bottom: 8px; font-weight: 500;">
-                    Avg days to recover: <span style="color: #3498db; font-weight: 700; font-size: 1.05em;">${avgDaysToRecover}</span>
-                </div>
-                <div style="text-align: left;">
-                    <button onclick="showRecoveryHistoryModal('${ticker}', '${recoveryHistoryId}')" 
-                            style="padding: 5px 10px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em; font-weight: 500;">
-                        Show History
-                    </button>
-                </div>
+                
+                <!-- Show History Button -->
+                <button onclick="showRecoveryHistoryModal('${ticker}', '${recoveryHistoryId}')" 
+                        style="padding: 6px 12px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em; font-weight: 500; width: 100%;">
+                    📊 Show History
+                </button>
             </div>`;
         }
 
@@ -4050,25 +5281,58 @@
             }
             
             const events = earningsData.next_events.slice(0, 3); // Show max 3 events
+            const today = new Date();
+            today.setHours(0, 0, 0, 0); // Set to start of day for accurate comparison
+            
             return events.map(event => {
                 const eventIcon = event.type === 'earnings' ? '💰' : '💵';
                 const eventColor = event.type === 'earnings' ? '#3498db' : '#27ae60';
                 let dateStr = '';
+                let eventDate = null;
+                let daysLeft = null;
+                
                 try {
                     // Handle date format - could be string "YYYY-MM-DD" or Date object
                     if (typeof event.date === 'string') {
-                        dateStr = new Date(event.date + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                        eventDate = new Date(event.date + 'T00:00:00Z');
+                        dateStr = eventDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                     } else if (event.date instanceof Date) {
-                        dateStr = event.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                        eventDate = new Date(event.date);
+                        eventDate.setHours(0, 0, 0, 0);
+                        dateStr = eventDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                     } else {
                         dateStr = event.date || 'Unknown';
+                    }
+                    
+                    // Calculate days left
+                    if (eventDate) {
+                        eventDate.setHours(0, 0, 0, 0);
+                        const diffTime = eventDate.getTime() - today.getTime();
+                        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                        daysLeft = diffDays;
                     }
                 } catch (e) {
                     dateStr = 'Unknown';
                 }
+                
+                // Format days left display
+                let daysLeftStr = '';
+                if (daysLeft !== null) {
+                    if (daysLeft < 0) {
+                        daysLeftStr = `<span style="font-weight: bold; color: #e74c3c;">${Math.abs(daysLeft)} days ago</span>`;
+                    } else if (daysLeft === 0) {
+                        daysLeftStr = `<span style="font-weight: bold; color: #e74c3c;">Today</span>`;
+                    } else if (daysLeft < 20) {
+                        daysLeftStr = `<span style="font-weight: bold; color: #e74c3c;">${daysLeft} days left</span>`;
+                    } else {
+                        daysLeftStr = `<span style="font-weight: bold; color: #27ae60;">${daysLeft} days left</span>`;
+                    }
+                }
+                
                 return `<div style="margin-bottom: 4px;">
                     <span style="color: ${eventColor}; font-weight: 600;">${eventIcon} ${event.name || event.type}</span>
                     <div style="font-size: 0.8em; color: #666; margin-top: 1px;">${dateStr}</div>
+                    ${daysLeftStr ? `<div style="font-size: 0.75em; margin-top: 2px;">${daysLeftStr}</div>` : ''}
                 </div>`;
             }).join('');
         }
@@ -4083,6 +5347,14 @@
             }
 
             results.forEach((stock, index) => {
+                // Debug: Log events available for matching (only for events debugging)
+                const eventsForRecovery = stock.earnings_dividends?.all_events_for_recovery || stock.earnings_dividends?.events_during || [];
+                const eventsCount = eventsForRecovery.length;
+                const recoveryHistoryCount = stock.recovery_history?.length || 0;
+                // Only log if we have recovery history (for events debugging)
+                if (recoveryHistoryCount > 0 && eventsCount > 0) {
+                    console.log(`[EVENTS DEBUG] ${stock.ticker}: ${recoveryHistoryCount} recovery items, ${eventsCount} events for matching`);
+                }
                 const row = document.createElement('tr');
                 row.style.borderBottom = '1px solid #e0e0e0';
 
@@ -4136,16 +5408,44 @@
                 const resistanceTarget = techTarget.nearest_resistance;
                 const resistanceTargetDist = techTarget.resistance_distance_pct;
 
+                // Check if ticker is missing from stocks.json
+                const isMissing = stock.is_missing_from_list === true;
+                
                 row.innerHTML = `
                     <td style="padding: 8px 4px; text-align: center; font-weight: 600; color: #667eea;">${index + 1}</td>
                     <td style="padding: 8px 6px; text-align: center;">
-                        <div style="font-weight: 500;">${stock.company_name}</div>
-                        <div style="font-size: 0.85em; color: #667eea; font-weight: 600; margin-top: 1px; display: flex; align-items: center; justify-content: center; gap: 6px;">
-                            <span>${stock.ticker}</span>
+                        ${isMissing ? `
+                            <div style="display: flex; align-items: center; justify-content: center; gap: 4px; margin-bottom: 6px;">
+                                <span style="display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 3px; cursor: pointer; font-size: 0.7em; transition: all 0.2s;" 
+                                      onmouseover="this.style.background='#ffc107'; this.style.transform='scale(1.15)';" 
+                                      onmouseout="this.style.background='#fff3cd'; this.style.transform='scale(1)';"
+                                      title="Not in stocks.json list">⚠️</span>
+                                <span onclick="showAddTickerPopup('${stock.ticker}', '${stock.company_name}', '${stock.industry}', ${stock.market_cap || 0}, '${stock.size_category || ''}')" 
+                                      style="display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; background: #e8f5e9; border: 1px solid #4caf50; border-radius: 3px; cursor: pointer; font-size: 0.7em; transition: all 0.2s;" 
+                                      onmouseover="this.style.background='#4caf50'; this.style.transform='scale(1.15)';" 
+                                      onmouseout="this.style.background='#e8f5e9'; this.style.transform='scale(1)';"
+                                      title="Add to stocks.json">➕</span>
+                            </div>
+                        ` : `
+                            <div style="display: flex; align-items: center; justify-content: center; gap: 4px; margin-bottom: 6px;">
+                                <span onclick="showRemoveTickerPopup('${stock.ticker}', '${stock.company_name}', '${stock.industry}', ${stock.market_cap || 0}, '${stock.size_category || ''}')" 
+                                      style="display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; background: #ffe8e8; border: 1px solid #e74c3c; border-radius: 3px; cursor: pointer; font-size: 0.7em; transition: all 0.2s;" 
+                                      onmouseover="this.style.background='#e74c3c'; this.style.transform='scale(1.15)';" 
+                                      onmouseout="this.style.background='#ffe8e8'; this.style.transform='scale(1)';"
+                                      title="Remove from stocks.json">🗑️</span>
+                            </div>
+                        `}
+                        <div style="font-weight: 600; font-size: 0.95em; color: #2c3e50; margin-bottom: 4px;">${stock.company_name}</div>
+                        <div style="display: flex; align-items: center; justify-content: center; gap: 6px;">
+                            <a href="javascript:void(0)" onclick="openChartIframe('${stock.ticker}', '${stock.bearish_date || ''}', '${stock.target_date || ''}')" 
+                               style="font-size: 0.85em; color: #667eea; font-weight: 600; text-decoration: none; cursor: pointer; transition: all 0.2s;"
+                               onmouseover="this.style.color='#4a5fd4'; this.style.textDecoration='underline';"
+                               onmouseout="this.style.color='#667eea'; this.style.textDecoration='none';"
+                               title="Open TradingView chart">${stock.ticker}</a>
                             <span onclick="copyTickerToClipboard('${stock.ticker}')" 
-                                  style="cursor: pointer; font-size: 0.9em; opacity: 0.7; transition: opacity 0.2s;" 
-                                  onmouseover="this.style.opacity='1'" 
-                                  onmouseout="this.style.opacity='0.7'"
+                                  style="display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; background: #f0f4ff; border: 1px solid #667eea; border-radius: 3px; cursor: pointer; font-size: 0.7em; transition: all 0.2s;" 
+                                  onmouseover="this.style.background='#667eea'; this.style.transform='scale(1.15)';" 
+                                  onmouseout="this.style.background='#f0f4ff'; this.style.transform='scale(1)';"
                                   title="Copy ticker to clipboard">📋</span>
                         </div>
                     </td>
@@ -4250,10 +5550,65 @@
                         </div>
                     </td>
                     <td style="padding: 8px 6px; text-align: left; font-size: 0.85em;">
-                        ${formatRecoveryHistory(stock.recovery_history || [], stock.ticker)}
+                        ${formatRecoveryHistory(
+                            stock.recovery_history || [],
+                            stock.ticker,
+                            stock.recovery_history_summary || null,
+                            stock.earnings_dividends?.all_events_for_recovery || stock.earnings_dividends?.events_during || [],
+                            stock.bearish_date,
+                            stock.target_date
+                        )}
                     </td>
                     <td style="padding: 8px 6px; text-align: left; font-size: 0.85em;">
-                        ${formatEventsDuring(stock.earnings_dividends || {})}
+                        ${(() => {
+                            const eventsDuring = stock.earnings_dividends?.events_during || [];
+                            const allEventsForRecovery = stock.earnings_dividends?.all_events_for_recovery || [];
+                            const actualBearishDate = stock.bearish_date;
+                            
+                            // Debug events filtering
+                            const debugInfo = stock._debug_events_filter;
+                            console.log(`[EVENTS DEBUG] ${stock.ticker}: Events filtering:`);
+                            console.log(`  - Actual bearish_date: ${actualBearishDate}`);
+                            console.log(`  - events_during count: ${eventsDuring.length} (should only include events between ${actualBearishDate} and ${stock.target_date})`);
+                            console.log(`  - all_events_for_recovery count: ${allEventsForRecovery.length} (full 120 days for recovery history)`);
+                            
+                            if (debugInfo) {
+                                console.log(`  [BACKEND DEBUG] Filtering info from backend:`);
+                                console.log(`    - bearish_date_used: ${debugInfo.bearish_date_used}`);
+                                console.log(`    - events_before_filter: ${debugInfo.events_before_filter}`);
+                                console.log(`    - events_after_filter: ${debugInfo.events_after_filter}`);
+                                console.log(`    - all_events_count: ${debugInfo.all_events_count}`);
+                                console.log(`    - original_event_dates:`, debugInfo.original_event_dates);
+                                console.log(`    - filtered_event_dates:`, debugInfo.filtered_event_dates);
+                                
+                                // Check if backend filtered correctly
+                                if (debugInfo.events_after_filter !== eventsDuring.length) {
+                                    console.error(`  ❌ MISMATCH: Backend filtered to ${debugInfo.events_after_filter} events, but frontend received ${eventsDuring.length} events!`);
+                                }
+                                if (debugInfo.all_events_count !== allEventsForRecovery.length) {
+                                    console.error(`  ❌ MISMATCH: Backend has ${debugInfo.all_events_count} all_events, but frontend received ${allEventsForRecovery.length}!`);
+                                }
+                            } else {
+                                console.warn(`  ⚠️  No backend debug info available - filtering code may not have run`);
+                            }
+                            
+                            if (eventsDuring.length > 0) {
+                                const eventDates = eventsDuring.map(e => e.date);
+                                console.log(`  - events_during dates:`, eventDates);
+                                
+                                // Check if any events are before bearish_date (this would be a bug)
+                                const eventsBeforeBearish = eventDates.filter(d => d && d < actualBearishDate);
+                                if (eventsBeforeBearish.length > 0) {
+                                    console.warn(`  ⚠️  BUG DETECTED: ${eventsBeforeBearish.length} events in events_during are BEFORE bearish_date:`, eventsBeforeBearish);
+                                }
+                            }
+                            
+                            if (allEventsForRecovery.length > 0 && eventsDuring.length !== allEventsForRecovery.length) {
+                                console.log(`  - all_events_for_recovery dates:`, allEventsForRecovery.map(e => e.date));
+                            }
+                            
+                            return formatEventsDuring(stock.earnings_dividends || {});
+                        })()}
                     </td>
                     <td style="padding: 12px; text-align: center;">
                         <div style="width: 400px; height: 200px; margin: 0 auto;">
@@ -4299,8 +5654,8 @@
                                          String(yesterday.getMonth() + 1).padStart(2, '0') + '-' + 
                                          String(yesterday.getDate()).padStart(2, '0');
                     
-                    // Debug logging
-                    console.log(`[Auto-load] ${stock.ticker}: targetDate=${targetDateStr}, today=${todayStr}, yesterday=${yesterdayStr}, shouldLoad=${targetDateStr >= yesterdayStr}`);
+                    // Debug logging (suppressed for cleaner console)
+                    // console.log(`[Auto-load] ${stock.ticker}: targetDate=${targetDateStr}, today=${todayStr}, yesterday=${yesterdayStr}, shouldLoad=${targetDateStr >= yesterdayStr}`);
                     
                     // If target_date >= yesterday, automatically load events
                     // This handles cases where:
@@ -4315,11 +5670,11 @@
                             
                             if (nextEventsCell && (btn || retries === 0)) {
                                 // DOM is ready, load events
-                                console.log(`[Auto-load] ${stock.ticker}: Loading events (cell found)`);
+                                // console.log(`[Auto-load] ${stock.ticker}: Loading events (cell found)`);
                                 loadStockNextEvents(stock.ticker, stock.bearish_date, stock.target_date);
                             } else if (retries > 0) {
                                 // DOM not ready yet, retry
-                                console.log(`[Auto-load] ${stock.ticker}: DOM not ready, retrying... (${retries} retries left)`);
+                                // console.log(`[Auto-load] ${stock.ticker}: DOM not ready, retrying... (${retries} retries left)`);
                                 setTimeout(() => tryLoadEvents(retries - 1), 100);
                             } else {
                                 console.warn(`[Auto-load] ${stock.ticker}: Failed to find DOM elements after retries`);
@@ -4611,7 +5966,7 @@
                 resistanceLevel = resistanceLevel || fallbackResistance;
                 console.warn(`[Chart ${stock.ticker}] Using fallback from stock object - Support: ${supportLevel}, Resistance: ${resistanceLevel}`);
             } else {
-                console.log(`[Chart ${stock.ticker}] ✅ Successfully read from canvas - Support: ${supportLevel}, Resistance: ${resistanceLevel}`);
+                // console.log(`[Chart ${stock.ticker}] ✅ Successfully read from canvas - Support: ${supportLevel}, Resistance: ${resistanceLevel}`);
             }
             
             // Custom plugin to draw vertical line at bearish date and horizontal support/resistance lines
@@ -4756,6 +6111,471 @@
                     }
                 }
             });
+        }
+
+        // Add Ticker Popup Modal
+        function showAddTickerPopup(ticker, name, industry, marketCap, sizeCategory) {
+            // Create modal overlay
+            const overlay = document.createElement('div');
+            overlay.id = 'add-ticker-overlay';
+            overlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 10000; display: flex; align-items: center; justify-content: center;';
+            
+            // Create modal content
+            const modal = document.createElement('div');
+            modal.style.cssText = 'background: white; padding: 30px; border-radius: 12px; max-width: 500px; width: 90%; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);';
+            
+            // Determine size category if not provided
+            let category = sizeCategory;
+            if (!category) {
+                if (marketCap >= 10000) {
+                    category = 'Large-Cap';
+                } else if (marketCap >= 2000) {
+                    category = 'Mid-Cap';
+                } else {
+                    category = 'Small-Cap';
+                }
+            }
+            
+            modal.innerHTML = `
+                <h2 style="margin: 0 0 20px 0; color: #2c3e50; font-size: 1.5em;">Add Ticker to stocks.json</h2>
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: 600; color: #667eea; margin-bottom: 5px;">Ticker:</div>
+                    <div style="font-size: 1.2em; font-weight: 600;">${ticker}</div>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: 600; color: #667eea; margin-bottom: 5px;">Company Name:</div>
+                    <div>${name}</div>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: 600; color: #667eea; margin-bottom: 5px;">Industry:</div>
+                    <div>${industry}</div>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: 600; color: #667eea; margin-bottom: 5px;">Market Cap:</div>
+                    <div>$${(marketCap / 1000).toFixed(1)}B (${marketCap}M)</div>
+                </div>
+                <div style="margin-bottom: 20px;">
+                    <div style="font-weight: 600; color: #667eea; margin-bottom: 5px;">Size Category:</div>
+                    <div>${category}</div>
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button onclick="closeAddTickerPopup()" 
+                            style="padding: 10px 20px; background: #95a5a6; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; transition: background 0.2s;"
+                            onmouseover="this.style.background='#7f8c8d'"
+                            onmouseout="this.style.background='#95a5a6'">
+                        Cancel
+                    </button>
+                    <button onclick="confirmAddTicker('${ticker}', '${name.replace(/'/g, "\\'")}', '${industry}', ${marketCap})" 
+                            style="padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; transition: background 0.2s;"
+                            onmouseover="this.style.background='#5568d3'"
+                            onmouseout="this.style.background='#667eea'">
+                        Add to List
+                    </button>
+                </div>
+                <div id="add-ticker-message" style="margin-top: 15px; padding: 10px; border-radius: 6px; display: none;"></div>
+            `;
+            
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+            
+            // Close on overlay click
+            overlay.addEventListener('click', function(e) {
+                if (e.target === overlay) {
+                    closeAddTickerPopup();
+                }
+            });
+        }
+        
+        function closeAddTickerPopup() {
+            const overlay = document.getElementById('add-ticker-overlay');
+            if (overlay) {
+                overlay.remove();
+            }
+        }
+        
+        function confirmAddTicker(ticker, name, industry, marketCap) {
+            const messageDiv = document.getElementById('add-ticker-message');
+            messageDiv.style.display = 'block';
+            messageDiv.innerHTML = '<div style="color: #667eea;">Adding ticker...</div>';
+            messageDiv.style.background = '#e8f4f8';
+            messageDiv.style.color = '#667eea';
+            
+            fetch('/api/add-ticker', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    ticker: ticker,
+                    name: name,
+                    industry: industry,
+                    market_cap: marketCap
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    messageDiv.innerHTML = `<div style="color: #27ae60; font-weight: 600;">✓ ${data.message}</div>`;
+                    messageDiv.style.background = '#d4edda';
+                    messageDiv.style.color = '#27ae60';
+                    
+                    // Close popup after 1.5 seconds and update UI for this ticker only
+                    setTimeout(() => {
+                        closeAddTickerPopup();
+                        // Update the UI for this specific ticker row - remove warning/add icons
+                        updateTickerRowAfterAdd(ticker);
+                    }, 1500);
+                } else {
+                    messageDiv.innerHTML = `<div style="color: #e74c3c; font-weight: 600;">✗ ${data.error || 'Failed to add ticker'}</div>`;
+                    messageDiv.style.background = '#f8d7da';
+                    messageDiv.style.color = '#e74c3c';
+                }
+            })
+            .catch(error => {
+                messageDiv.innerHTML = `<div style="color: #e74c3c; font-weight: 600;">✗ Error: ${error.message}</div>`;
+                messageDiv.style.background = '#f8d7da';
+                messageDiv.style.color = '#e74c3c';
+            });
+        }
+        
+        function updateTickerRowAfterAdd(ticker) {
+            // Find all table rows and update the one matching this ticker
+            const tbody = document.getElementById('bearish-table-body');
+            if (!tbody) {
+                console.warn('[Add Row] bearish-table-body not found');
+                return;
+            }
+            
+            const rows = tbody.getElementsByTagName('tr');
+            for (let row of rows) {
+                // Check if this row contains the ticker we just added
+                const cells = row.getElementsByTagName('td');
+                if (cells.length > 1) {
+                    const companyCell = cells[1]; // Company column is the second cell
+                    
+                    // Look for the ticker span that contains our ticker symbol
+                    const tickerSpans = companyCell.querySelectorAll('span');
+                    let foundTicker = false;
+                    for (let span of tickerSpans) {
+                        if (span.textContent.trim() === ticker) {
+                            foundTicker = true;
+                            break;
+                        }
+                    }
+                    
+                    if (foundTicker) {
+                        console.log(`[Add Row] Found ticker "${ticker}", looking for icons container...`);
+                        
+                        // Find and remove the icons container (the div with warning and add icons)
+                        // Look for the first div that contains warning or add icons
+                        const allDivs = companyCell.querySelectorAll('div');
+                        console.log(`[Add Row] Found ${allDivs.length} divs in company cell`);
+                        
+                        let iconsRemoved = false;
+                        for (let div of allDivs) {
+                            // Check if this div contains the warning or add icons
+                            const divHTML = div.innerHTML;
+                            const hasWarningIcon = divHTML.includes('⚠️');
+                            const hasAddIcon = divHTML.includes('➕');
+                            const hasWarningTitle = divHTML.includes('Not in stocks.json');
+                            const hasAddTitle = divHTML.includes('Add to stocks.json');
+                            
+                            // Check if it's the icons container (has either icon AND one of the title texts)
+                            if ((hasWarningIcon || hasAddIcon) && (hasWarningTitle || hasAddTitle)) {
+                                console.log(`[Add Row] Found icons container with warning: ${hasWarningIcon}, add: ${hasAddIcon}`);
+                                
+                                // Get company info from the row before removing
+                                const companyNameDiv = companyCell.querySelector('div[style*="font-weight: 600"]');
+                                const companyName = companyNameDiv ? companyNameDiv.textContent.trim() : '';
+                                
+                                // Try to get industry and market cap from the row
+                                const industryCell = cells[2];
+                                const industry = industryCell ? industryCell.textContent.trim().split('\n')[0] : '';
+                                
+                                // Default market cap (we might not have it easily accessible, so use 0 as fallback)
+                                const marketCap = 0;
+                                const sizeCategory = '';
+                                
+                                // Remove the icons container
+                                div.remove();
+                                iconsRemoved = true;
+                                console.log(`[Add Row] Icons container removed`);
+                                
+                                // Add garbage icon container (since ticker is now in the list)
+                                const garbageIconContainer = document.createElement('div');
+                                garbageIconContainer.style.cssText = 'display: flex; align-items: center; justify-content: center; gap: 4px; margin-bottom: 6px;';
+                                
+                                garbageIconContainer.innerHTML = `
+                                    <span onclick="showRemoveTickerPopup('${ticker}', '${companyName.replace(/'/g, "\\'")}', '${industry.replace(/'/g, "\\'")}', ${marketCap}, '${sizeCategory}')" 
+                                          style="display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; background: #ffe8e8; border: 1px solid #e74c3c; border-radius: 3px; cursor: pointer; font-size: 0.7em; transition: all 0.2s;" 
+                                          onmouseover="this.style.background='#e74c3c'; this.style.transform='scale(1.15)';" 
+                                          onmouseout="this.style.background='#ffe8e8'; this.style.transform='scale(1)';"
+                                          title="Remove from stocks.json">🗑️</span>
+                                `;
+                                
+                                // Insert the garbage icon container at the beginning of the company cell
+                                companyCell.insertBefore(garbageIconContainer, companyCell.firstChild);
+                                console.log(`[Add Row] Garbage icon added`);
+                                break; // Found and updated, exit loop
+                            }
+                        }
+                        
+                        if (!iconsRemoved) {
+                            console.warn(`[Add Row] Could not find icons container for ticker ${ticker}`);
+                            // Debug: log all divs
+                            allDivs.forEach((div, idx) => {
+                                console.log(`[Add Row] Div ${idx}: ${div.innerHTML.substring(0, 100)}...`);
+                            });
+                        }
+                        
+                        break; // Found and updated, exit loop
+                    }
+                }
+            }
+        }
+        
+        // Remove Ticker Popup Modal
+        function showRemoveTickerPopup(ticker, name, industry, marketCap, sizeCategory) {
+            // Create modal overlay
+            const overlay = document.createElement('div');
+            overlay.id = 'remove-ticker-overlay';
+            overlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 10000; display: flex; align-items: center; justify-content: center;';
+            
+            // Create modal content
+            const modal = document.createElement('div');
+            modal.style.cssText = 'background: white; padding: 30px; border-radius: 12px; max-width: 500px; width: 90%; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);';
+            
+            // Determine size category if not provided
+            let category = sizeCategory;
+            if (!category) {
+                if (marketCap >= 10000) {
+                    category = 'Large-Cap';
+                } else if (marketCap >= 2000) {
+                    category = 'Mid-Cap';
+                } else {
+                    category = 'Small-Cap';
+                }
+            }
+            
+            modal.innerHTML = `
+                <h2 style="margin: 0 0 20px 0; color: #2c3e50; font-size: 1.5em;">Remove Ticker from stocks.json</h2>
+                <div style="margin-bottom: 15px; padding: 15px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
+                    <div style="font-weight: 600; color: #856404; margin-bottom: 5px;">⚠️ Warning</div>
+                    <div style="color: #856404; font-size: 0.9em;">This will remove ${ticker} from stocks.json. The ticker will still appear in results but will show as missing from the list.</div>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: 600; color: #667eea; margin-bottom: 5px;">Ticker:</div>
+                    <div style="font-size: 1.2em; font-weight: 600;">${ticker}</div>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: 600; color: #667eea; margin-bottom: 5px;">Company Name:</div>
+                    <div>${name}</div>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: 600; color: #667eea; margin-bottom: 5px;">Industry:</div>
+                    <div>${industry}</div>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: 600; color: #667eea; margin-bottom: 5px;">Market Cap:</div>
+                    <div>$${(marketCap / 1000).toFixed(1)}B (${marketCap}M)</div>
+                </div>
+                <div style="margin-bottom: 20px;">
+                    <div style="font-weight: 600; color: #667eea; margin-bottom: 5px;">Size Category:</div>
+                    <div>${category}</div>
+                </div>
+                <div id="remove-ticker-message" style="display: none; margin-bottom: 15px; padding: 12px; border-radius: 6px; font-weight: 500;"></div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button onclick="closeRemoveTickerPopup()" 
+                            style="padding: 10px 20px; background: #95a5a6; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; transition: background 0.2s;"
+                            onmouseover="this.style.background='#7f8c8d'"
+                            onmouseout="this.style.background='#95a5a6'">
+                        Cancel
+                    </button>
+                    <button onclick="confirmRemoveTicker('${ticker}', '${name.replace(/'/g, "\\'")}', '${industry}', ${marketCap}, '${category}')" 
+                            style="padding: 10px 20px; background: #e74c3c; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; transition: background 0.2s;"
+                            onmouseover="this.style.background='#c0392b'"
+                            onmouseout="this.style.background='#e74c3c'">
+                        Remove
+                    </button>
+                </div>
+            `;
+            
+            overlay.appendChild(modal);
+            overlay.onclick = function(e) {
+                if (e.target === overlay) {
+                    closeRemoveTickerPopup();
+                }
+            };
+            document.body.appendChild(overlay);
+        }
+        
+        function closeRemoveTickerPopup() {
+            const overlay = document.getElementById('remove-ticker-overlay');
+            if (overlay) {
+                overlay.remove();
+            }
+        }
+        
+        function confirmRemoveTicker(ticker, name, industry, marketCap, sizeCategory) {
+            const messageDiv = document.getElementById('remove-ticker-message');
+            messageDiv.style.display = 'block';
+            messageDiv.innerHTML = '<div style="color: #667eea;">Removing ticker...</div>';
+            messageDiv.style.background = '#e8f4f8';
+            messageDiv.style.color = '#667eea';
+            
+            fetch('/api/remove-ticker', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    ticker: ticker
+                })
+            })
+            .then(response => {
+                // Check if response is OK and content type is JSON
+                if (!response.ok) {
+                    return response.text().then(text => {
+                        try {
+                            const json = JSON.parse(text);
+                            throw new Error(json.error || `Server error: ${response.status}`);
+                        } catch (e) {
+                            if (e instanceof Error && e.message) {
+                                throw e;
+                            }
+                            throw new Error(`Server error: ${response.status} - ${text.substring(0, 100)}`);
+                        }
+                    });
+                }
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    return response.text().then(text => {
+                        throw new Error(`Expected JSON but got ${contentType}. Response: ${text.substring(0, 100)}`);
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    messageDiv.innerHTML = `<div style="color: #27ae60; font-weight: 600;">✓ ${data.message}</div>`;
+                    messageDiv.style.background = '#d4edda';
+                    messageDiv.style.color = '#27ae60';
+                    
+                    // Close popup after 1.5 seconds and update UI for this ticker only
+                    setTimeout(() => {
+                        closeRemoveTickerPopup();
+                        // Update the UI for this specific ticker row - remove garbage icon and add warning/add icons
+                        updateTickerRowAfterRemove(ticker, name, industry, marketCap, sizeCategory);
+                    }, 1500);
+                } else {
+                    messageDiv.innerHTML = `<div style="color: #e74c3c; font-weight: 600;">✗ ${data.error || 'Failed to remove ticker'}</div>`;
+                    messageDiv.style.background = '#f8d7da';
+                    messageDiv.style.color = '#e74c3c';
+                }
+            })
+            .catch(error => {
+                console.error('Remove ticker error:', error);
+                messageDiv.innerHTML = `<div style="color: #e74c3c; font-weight: 600;">✗ Error: ${error.message || 'Failed to remove ticker'}</div>`;
+                messageDiv.style.background = '#f8d7da';
+                messageDiv.style.color = '#e74c3c';
+            });
+        }
+        
+        function updateTickerRowAfterRemove(ticker, name, industry, marketCap, sizeCategory) {
+            // Find all table rows and remove the one matching this ticker
+            const tbody = document.getElementById('bearish-table-body');
+            if (!tbody) {
+                console.error('[Remove Row] bearish-table-body not found');
+                return;
+            }
+            
+            // Convert to array to avoid live collection issues
+            const rows = Array.from(tbody.getElementsByTagName('tr'));
+            let rowRemoved = false;
+            
+            console.log(`[Remove Row] Searching for ticker: "${ticker}" in ${rows.length} rows`);
+            
+            for (let row of rows) {
+                // Check if this row contains the ticker we just removed
+                const cells = row.getElementsByTagName('td');
+                if (cells.length > 1) {
+                    const companyCell = cells[1]; // Company column is the second cell
+                    
+                    // Method 1: Look for the ticker span that contains our ticker symbol
+                    const tickerSpans = companyCell.querySelectorAll('span');
+                    let foundTicker = false;
+                    
+                    for (let span of tickerSpans) {
+                        const spanText = span.textContent.trim();
+                        // Check exact match or if ticker is contained in the span text
+                        if (spanText === ticker || spanText.toUpperCase() === ticker.toUpperCase()) {
+                            foundTicker = true;
+                            console.log(`[Remove Row] Found ticker "${ticker}" in span with text: "${spanText}"`);
+                            break;
+                        }
+                    }
+                    
+                    // Method 2: If not found in spans, check the entire cell text content
+                    if (!foundTicker) {
+                        const cellText = companyCell.textContent || companyCell.innerText;
+                        if (cellText && cellText.toUpperCase().includes(ticker.toUpperCase())) {
+                            // Double-check by looking for the ticker pattern more carefully
+                            const tickerRegex = new RegExp(`\\b${ticker}\\b`, 'i');
+                            if (tickerRegex.test(cellText)) {
+                                foundTicker = true;
+                                console.log(`[Remove Row] Found ticker "${ticker}" in cell text: "${cellText.substring(0, 50)}..."`);
+                            }
+                        }
+                    }
+                    
+                    if (foundTicker) {
+                        // Remove the entire row
+                        row.remove();
+                        rowRemoved = true;
+                        
+                        // Update the total count if it exists
+                        const totalElement = document.getElementById('bearish-total');
+                        if (totalElement) {
+                            const currentTotal = parseInt(totalElement.textContent) || 0;
+                            if (currentTotal > 0) {
+                                totalElement.textContent = currentTotal - 1;
+                            }
+                        }
+                        
+                        // Update row numbers for remaining rows
+                        const remainingRows = Array.from(tbody.getElementsByTagName('tr'));
+                        for (let i = 0; i < remainingRows.length; i++) {
+                            const rankCell = remainingRows[i].getElementsByTagName('td')[0];
+                            if (rankCell) {
+                                rankCell.textContent = i + 1;
+                            }
+                        }
+                        
+                        console.log(`[Remove Row] Row for ticker ${ticker} removed successfully`);
+                        break; // Found and removed, exit loop
+                    }
+                }
+            }
+            
+            if (!rowRemoved) {
+                console.warn(`[Remove Row] Could not find row for ticker ${ticker} to remove`);
+                // Debug: Log all tickers found in the table
+                console.log('[Remove Row] Available tickers in table:');
+                const allRows = Array.from(tbody.getElementsByTagName('tr'));
+                allRows.forEach((r, idx) => {
+                    const cells = r.getElementsByTagName('td');
+                    if (cells.length > 1) {
+                        const companyCell = cells[1];
+                        const tickerSpans = companyCell.querySelectorAll('span');
+                        tickerSpans.forEach(span => {
+                            const text = span.textContent.trim();
+                            if (text && text.length <= 10 && !text.includes('📋') && !text.includes('⚠️') && !text.includes('➕') && !text.includes('🗑️')) {
+                                console.log(`  Row ${idx + 1}: Found potential ticker: "${text}"`);
+                            }
+                        });
+                    }
+                });
+            }
         }
     </script>
 </body>

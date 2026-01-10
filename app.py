@@ -10,11 +10,29 @@ import sys
 import io
 import json
 import time
+import copy
 from contextlib import redirect_stdout, redirect_stderr
 from threading import Lock, Thread
 import queue
 
 app = Flask(__name__)
+
+# Debug log file for events filtering
+DEBUG_LOG_FILE = 'events_filter_debug.log'
+
+def _write_debug_log_to_file(message):
+    """Write debug message to log file"""
+    try:
+        import os
+        # Use absolute path to ensure we can write
+        log_path = os.path.join(os.getcwd(), DEBUG_LOG_FILE)
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(message)
+            f.flush()  # Ensure it's written immediately
+    except Exception as e:
+        # Log the error to stderr so we can see it
+        import sys
+        print(f"[DEBUG LOG ERROR] Failed to write to {DEBUG_LOG_FILE}: {e}", file=sys.stderr)
 
 # In-memory cache for AI opinions
 # Key: (ticker, bearish_date, target_date) -> {score, explanation, timestamp}
@@ -98,6 +116,69 @@ class LogCapture:
 def index():
     """Main page with layoff data table"""
     return render_template('index.html')
+
+@app.route('/chart')
+def chart():
+    """Render TradingView chart page"""
+    return render_template('chart.html')
+
+@app.route('/api/pine-script/bearish-date')
+def get_bearish_date_pine_script():
+    """Generate Pine Script for drawing vertical line at bearish date"""
+    bearish_date = request.args.get('date')
+    if not bearish_date:
+        return jsonify({'error': 'bearish_date parameter required'}), 400
+    
+    try:
+        # Parse date (format: YYYY-MM-DD)
+        date_parts = bearish_date.split('-')
+        if len(date_parts) != 3:
+            return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+        
+        year = int(date_parts[0])
+        month = int(date_parts[1])
+        day = int(date_parts[2])
+        
+        # Generate Pine Script code
+        pine_script = f"""//@version=5
+indicator("Bearish Date Line - {bearish_date}", overlay=true, max_lines_count=500)
+
+// Bearish date parameters (pre-filled)
+year = {year}
+month = {month}
+day = {day}
+
+// Line style and color
+lineColor = input.color(color.red, title="Line Color")
+lineWidth = input.int(2, title="Line Width", minval=1, maxval=5)
+
+// Convert input date to timestamp
+targetTime = timestamp(year, month, day, 0, 0)
+
+// Draw vertical line on the bearish date
+if time >= targetTime and time < targetTime + 86400000
+    // Get the full price range for the line
+    var float lineLow = low
+    var float lineHigh = high
+    
+    // Update range to cover full visible area
+    lineLow := math.min(lineLow, low)
+    lineHigh := math.max(lineHigh, high)
+    
+    // Draw the line
+    line.new(bar_index, lineLow, bar_index, lineHigh, color=lineColor, width=lineWidth, style=line.style_solid)
+    
+    // Add label at the top
+    label.new(bar_index, lineHigh, "Bearish Date\\n{bearish_date}", 
+              style=label.style_label_down, color=lineColor, textcolor=color.white, size=size.small)
+"""
+        
+        # Return as plain text (Pine Script)
+        from flask import Response
+        return Response(pine_script, mimetype='text/plain')
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/layoffs')
 def get_layoffs():
@@ -860,6 +941,8 @@ def get_bearish_analytics_stream():
         industry = request.args.get('industry', 'All Industries')
         filter_type = request.args.get('filter_type', 'bearish')  # 'bearish' or 'bullish'
         pct_threshold_str = request.args.get('pct_threshold')
+        flexible_days = int(request.args.get('flexible_days', 0))
+        ticker_filter_str = request.args.get('ticker_filter', '').strip()
         
         if not bearish_date_str or not target_date_str:
             yield f"data: {json.dumps({'type': 'error', 'message': 'bearish_date and target_date are required'})}\n\n"
@@ -897,7 +980,15 @@ def get_bearish_analytics_stream():
             nonlocal fetch_complete, results, all_logs
             try:
                 tracker = LayoffTracker()
-                results, logs = tracker.get_bearish_analytics(bearish_date, target_date, industry, filter_type=filter_type, pct_threshold=pct_threshold)
+                results, logs = tracker.get_bearish_analytics(
+                    bearish_date,
+                    target_date,
+                    industry,
+                    filter_type=filter_type,
+                    pct_threshold=pct_threshold,
+                    flexible_days=flexible_days,
+                    ticker_filter=ticker_filter_str
+                )
                 all_logs = logs
                 fetch_complete = True
             except Exception as e:
@@ -949,21 +1040,227 @@ def get_bearish_analytics_stream():
             # Ensure all data is JSON serializable (convert any date objects, etc.)
             serializable_results = []
             for result in results:
-                serializable_result = result.copy()
+                # Use deepcopy to ensure nested structures (like recovery_history with event_info) are properly copied
+                serializable_result = copy.deepcopy(result)
+                
                 # Ensure earnings_dividends dates are strings
                 if 'earnings_dividends' in serializable_result and serializable_result['earnings_dividends']:
                     ed = serializable_result['earnings_dividends']
+                    ticker_name = serializable_result.get('ticker', 'UNKNOWN')
+                    bearish_date_str = serializable_result.get('bearish_date', 'UNKNOWN')
+                    
+                    # Debug: Log what we're serializing (also write to file)
+                    events_during_count = len(ed.get('events_during', []))
+                    all_events_count = len(ed.get('all_events_for_recovery', []))
+                    log_msg = f"[SERIALIZATION] {ticker_name}: Serializing events - events_during={events_during_count}, all_events_for_recovery={all_events_count}, bearish_date={bearish_date_str}\n"
+                    print(log_msg, end='')
+                    _write_debug_log_to_file(log_msg)
+                    
+                    if events_during_count > 0:
+                        events_during_dates = [e.get('date') for e in ed.get('events_during', []) if e.get('date')]
+                        log_msg = f"[SERIALIZATION] {ticker_name}: events_during dates: {events_during_dates}\n"
+                        print(log_msg, end='')
+                        _write_debug_log_to_file(log_msg)
+                        # Check if any are before bearish_date (BUG DETECTION)
+                        events_before = [d for d in events_during_dates if d and d < bearish_date_str]
+                        if events_before:
+                            log_msg = f"[SERIALIZATION] ⚠️  {ticker_name}: BUG - {len(events_before)} events in events_during are BEFORE bearish_date: {events_before}\n"
+                            print(log_msg, end='')
+                            _write_debug_log_to_file(log_msg)
+                    
                     if 'events_during' in ed and ed['events_during']:
                         ed['events_during'] = [
                             {**event, 'date': str(event.get('date', ''))} if not isinstance(event.get('date'), str) else event
                             for event in ed['events_during']
+                        ]
+                    if 'all_events_for_recovery' in ed and ed['all_events_for_recovery']:
+                        ed['all_events_for_recovery'] = [
+                            {**event, 'date': str(event.get('date', ''))} if not isinstance(event.get('date'), str) else event
+                            for event in ed['all_events_for_recovery']
                         ]
                     if 'next_events' in ed and ed['next_events']:
                         ed['next_events'] = [
                             {**event, 'date': str(event.get('date', ''))} if not isinstance(event.get('date'), str) else event
                             for event in ed['next_events']
                         ]
+                
+                # Ensure recovery_history event_info is properly serialized
+                if 'recovery_history' in serializable_result and serializable_result['recovery_history']:
+                    rh = serializable_result['recovery_history']
+                    if isinstance(rh, list):
+                        ticker_name = result.get('ticker', 'UNKNOWN')
+                        print(f"[SERIALIZATION] {ticker_name}: Processing {len(rh)} recovery_history items")
+                        
+                        events_found_count = 0
+                        for idx, item in enumerate(rh):
+                            # CRITICAL: Ensure event_info key ALWAYS exists (even if None)
+                            # This is essential - JSON will include null values, but missing keys won't be in JSON
+                            if 'event_info' not in item:
+                                item['event_info'] = None
+                                print(f"[SERIALIZATION] {ticker_name} recovery_history[{idx}]: Added missing 'event_info' key")
+                            
+                            # Explicitly ensure the key exists and is set (even if None)
+                            # This prevents the key from being removed during JSON serialization
+                            if 'event_info' not in item:
+                                item['event_info'] = None
+                            
+                            # Only serialize if event_info is not None
+                            if item.get('event_info') is not None:
+                                event_info = item['event_info']
+                                print(f"[SERIALIZATION] {ticker_name} recovery_history[{idx}]: Serializing event_info: {event_info}")
+                                
+                                # Ensure date is a string
+                                if 'date' in event_info:
+                                    if event_info['date'] is None:
+                                        event_info['date'] = ''
+                                    elif not isinstance(event_info['date'], str):
+                                        event_info['date'] = str(event_info['date'])
+                                
+                                # Ensure all fields are JSON serializable
+                                event_info['type'] = str(event_info.get('type', ''))
+                                event_info['name'] = str(event_info.get('name', 'Event'))
+                                
+                                # Ensure days_after_drop is an integer
+                                try:
+                                    event_info['days_after_drop'] = int(event_info.get('days_after_drop', 0))
+                                except (ValueError, TypeError):
+                                    event_info['days_after_drop'] = 0
+                                
+                                event_info['icon'] = str(event_info.get('icon', '📅'))
+                                
+                                events_found_count += 1
+                                
+                                # Verify JSON serializability
+                                try:
+                                    json.dumps(event_info)
+                                    print(f"[SERIALIZATION] {ticker_name} recovery_history[{idx}]: event_info is JSON serializable ✓")
+                                except (TypeError, ValueError) as e:
+                                    print(f"[SERIALIZATION] {ticker_name} recovery_history[{idx}]: ERROR - event_info is NOT JSON serializable: {e}")
+                            
+                            # Log structure for debugging (first item only)
+                            if idx == 0:
+                                item_keys = list(item.keys())
+                                has_key = 'event_info' in item
+                                key_value = item.get('event_info')
+                                print(f"[SERIALIZATION] {ticker_name} recovery_history[0]: keys={item_keys}, event_info={'present' if has_key else 'MISSING'}, value={key_value}")
+                                # CRITICAL: Force add the key if missing, then verify JSON
+                                if not has_key:
+                                    print(f"[SERIALIZATION] {ticker_name} recovery_history[0]: ⚠️ Key missing! Force adding 'event_info': None")
+                                    item['event_info'] = None
+                                    has_key = True
+                                # Verify the key will be in JSON
+                                try:
+                                    test_json = json.dumps(item)
+                                    if '"event_info"' in test_json:
+                                        print(f"[SERIALIZATION] {ticker_name} recovery_history[0]: ✅ 'event_info' key WILL be in JSON")
+                                    else:
+                                        print(f"[SERIALIZATION] {ticker_name} recovery_history[0]: ❌ 'event_info' key will NOT be in JSON!")
+                                        print(f"[SERIALIZATION] {ticker_name} recovery_history[0]: JSON preview: {test_json[:200]}")
+                                        # Force add again and retest
+                                        item['event_info'] = None
+                                        test_json2 = json.dumps(item)
+                                        if '"event_info"' in test_json2:
+                                            print(f"[SERIALIZATION] {ticker_name} recovery_history[0]: ✅ After force-add, key IS in JSON")
+                                        else:
+                                            print(f"[SERIALIZATION] {ticker_name} recovery_history[0]: ❌ After force-add, key STILL NOT in JSON!")
+                                except Exception as e:
+                                    print(f"[SERIALIZATION] {ticker_name} recovery_history[0]: ERROR testing JSON: {e}")
+                        
+                        print(f"[SERIALIZATION] {ticker_name}: {len(rh)} items processed, {events_found_count} with non-None event_info")
+                        
+                        # CRITICAL: Verify event_info key exists in ALL items after processing
+                        items_missing_key = [i for i, item in enumerate(rh) if 'event_info' not in item]
+                        if items_missing_key:
+                            print(f"[SERIALIZATION] {ticker_name}: ERROR - {len(items_missing_key)} items still missing 'event_info' key after processing: {items_missing_key}")
+                            # Force add the key to all missing items
+                            for missing_idx in items_missing_key:
+                                rh[missing_idx]['event_info'] = None
+                                print(f"[SERIALIZATION] {ticker_name}: Force-added 'event_info' key to item {missing_idx}")
+                        else:
+                            print(f"[SERIALIZATION] {ticker_name}: ✅ All {len(rh)} items have 'event_info' key")
+                
+                # Preserve debug info from main.py
+                if '_debug_events_filter' in result:
+                    serializable_result['_debug_events_filter'] = result['_debug_events_filter']
+                    ticker_name = serializable_result.get('ticker', 'UNKNOWN')
+                    print(f"[SERIALIZATION] {ticker_name}: Preserved _debug_events_filter: {serializable_result['_debug_events_filter']}")
+                else:
+                    ticker_name = serializable_result.get('ticker', 'UNKNOWN')
+                    print(f"[SERIALIZATION] {ticker_name}: ⚠️  _debug_events_filter NOT FOUND in result - function may not have run")
+                
                 serializable_results.append(serializable_result)
+            
+            # Final verification: Check recovery_history event_info before sending
+            for result in serializable_results:
+                ticker = result.get('ticker', 'UNKNOWN')
+                if 'recovery_history' in result and result['recovery_history']:
+                    rh = result['recovery_history']
+                    items_with_key = sum(1 for item in rh if 'event_info' in item)
+                    items_with_events = sum(1 for item in rh if item.get('event_info') is not None)
+                    
+                    print(f"[FINAL CHECK] {ticker}: About to send {len(rh)} recovery_history items")
+                    print(f"[FINAL CHECK] {ticker}: {items_with_key} items have 'event_info' key, {items_with_events} have non-None event_info")
+                    
+                    # Verify structure of first item
+                    if len(rh) > 0:
+                        first_item = rh[0]
+                        first_item_keys = list(first_item.keys())
+                        has_event_info_key = 'event_info' in first_item
+                        event_info_value = first_item.get('event_info')
+                        
+                        print(f"[FINAL CHECK] {ticker}: First item keys: {first_item_keys}")
+                        print(f"[FINAL CHECK] {ticker}: First item has 'event_info' key: {has_event_info_key}")
+                        print(f"[FINAL CHECK] {ticker}: First item event_info value: {event_info_value}")
+                        
+                        # Verify JSON serializability of first item AND check if event_info is in JSON string
+                        try:
+                            test_json_str = json.dumps(first_item)
+                            if '"event_info"' in test_json_str:
+                                print(f"[FINAL CHECK] {ticker}: ✅ First item is JSON serializable AND 'event_info' key IS in JSON string")
+                            else:
+                                print(f"[FINAL CHECK] {ticker}: ❌ First item is JSON serializable BUT 'event_info' key is NOT in JSON string!")
+                                print(f"[FINAL CHECK] {ticker}: JSON preview: {test_json_str[:300]}")
+                                # Force add the key and retest
+                                first_item['event_info'] = None
+                                test_json_str2 = json.dumps(first_item)
+                                if '"event_info"' in test_json_str2:
+                                    print(f"[FINAL CHECK] {ticker}: ✅ After force-add, 'event_info' key IS in JSON string")
+                                else:
+                                    print(f"[FINAL CHECK] {ticker}: ❌ After force-add, 'event_info' key STILL NOT in JSON string!")
+                        except (TypeError, ValueError) as e:
+                            print(f"[FINAL CHECK] {ticker}: ERROR - First item is NOT JSON serializable: {e}")
+            
+            # FINAL SAFEGUARD: Force add event_info key to ALL recovery_history items right before JSON serialization
+            for result in serializable_results:
+                ticker = result.get('ticker', 'UNKNOWN')
+                if 'recovery_history' in result and result['recovery_history']:
+                    rh = result['recovery_history']
+                    items_fixed = 0
+                    for item in rh:
+                        if 'event_info' not in item:
+                            item['event_info'] = None
+                            items_fixed += 1
+                    if items_fixed > 0:
+                        print(f"[FINAL SAFEGUARD] {ticker}: Force-added 'event_info' key to {items_fixed} items right before JSON serialization")
+                    
+                    # Verify first item has the key and it's in JSON
+                    if len(rh) > 0:
+                        first_item = rh[0]
+                        if 'event_info' not in first_item:
+                            first_item['event_info'] = None
+                            print(f"[FINAL SAFEGUARD] {ticker}: ⚠️ First item still missing key after fix - force-added again")
+                        
+                        # Test JSON serialization
+                        try:
+                            test_json_str = json.dumps(first_item)
+                            if '"event_info"' in test_json_str:
+                                print(f"[FINAL SAFEGUARD] {ticker}: ✅ 'event_info' key IS in JSON string")
+                            else:
+                                print(f"[FINAL SAFEGUARD] {ticker}: ❌ 'event_info' key is NOT in JSON string!")
+                                print(f"[FINAL SAFEGUARD] {ticker}: Keys in dict: {list(first_item.keys())}")
+                                print(f"[FINAL SAFEGUARD] {ticker}: JSON preview: {test_json_str[:300]}")
+                        except Exception as e:
+                            print(f"[FINAL SAFEGUARD] {ticker}: ERROR testing JSON: {e}")
             
             response_data = {
                 'type': 'complete',
@@ -1010,6 +1307,7 @@ def get_bearish_analytics():
         industry = request.args.get('industry', 'All Industries')
         filter_type = request.args.get('filter_type', 'bearish')  # 'bearish' or 'bullish'
         pct_threshold_str = request.args.get('pct_threshold')
+        flexible_days = int(request.args.get('flexible_days', 0))
         
         if not bearish_date_str or not target_date_str:
             return jsonify({'error': 'bearish_date and target_date are required'}), 400
@@ -1040,10 +1338,10 @@ def get_bearish_analytics():
         
         # Get analytics
         try:
-            print(f"[BEARISH ANALYTICS API] Starting analysis: bearish_date={bearish_date_str}, target_date={target_date_str}, industry={industry}, filter_type={filter_type}, pct_threshold={pct_threshold}")
+            print(f"[BEARISH ANALYTICS API] Starting analysis: bearish_date={bearish_date_str}, target_date={target_date_str}, industry={industry}, filter_type={filter_type}, pct_threshold={pct_threshold}, flexible_days={flexible_days}")
             tracker = LayoffTracker()
             print(f"[BEARISH ANALYTICS API] Tracker initialized, calling get_bearish_analytics...")
-            results, logs = tracker.get_bearish_analytics(bearish_date, target_date, industry, filter_type=filter_type, pct_threshold=pct_threshold)
+            results, logs = tracker.get_bearish_analytics(bearish_date, target_date, industry, filter_type=filter_type, pct_threshold=pct_threshold, flexible_days=flexible_days)
             print(f"[BEARISH ANALYTICS API] Analysis complete: {len(results)} results, {len(logs)} log entries")
             
             return jsonify({
@@ -1214,15 +1512,175 @@ def get_ai_opinion():
                     'cached': False
                 })
         else:
-            return jsonify({'error': 'Failed to get AI analysis'}), 500
+            # Check if API key is the issue
+            if not tracker.claude_api_key or tracker.claude_api_key == 'sk-ant-api03-YourActualClaudeAPIKeyHere-ReplaceThisWithYourRealKey':
+                return jsonify({
+                    'error': 'AI opinion not configured. Please update CLAUDE_API_KEY in config.py with your actual API key.'
+                }), 500
+            
+            # Provide more specific error message
+            error_msg = 'Failed to get AI analysis. This could be due to: network connectivity issues, API timeout, or Claude API service issues. Check server logs (server.log) for details.'
+            return jsonify({'error': error_msg}), 500
         
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
-        print(f"[AI OPINION API ERROR] {error_trace}")
+        error_msg = f'Error fetching AI opinion: {str(e)}'
+        print(f"[AI OPINION API ERROR] {error_trace}", flush=True)
+        # Also write to log file if it exists
+        try:
+            with open('server.log', 'a') as f:
+                f.write(f"\n[AI OPINION API ERROR] {datetime.now()}\n{error_trace}\n\n")
+        except:
+            pass
         return jsonify({
-            'error': f'Error fetching AI opinion: {str(e)}'
+            'error': error_msg
         }), 500
+
+@app.route('/api/add-ticker', methods=['POST'])
+def add_ticker():
+    """Add a ticker to stocks.json"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        ticker = data.get('ticker', '').strip().upper()
+        name = data.get('name', '').strip()
+        industry = data.get('industry', '').strip()
+        market_cap = data.get('market_cap', 0)
+        
+        # Validate required fields
+        if not ticker:
+            return jsonify({'error': 'Ticker is required'}), 400
+        if not name:
+            return jsonify({'error': 'Company name is required'}), 400
+        if not industry:
+            return jsonify({'error': 'Industry is required'}), 400
+        if not market_cap or market_cap <= 0:
+            return jsonify({'error': 'Valid market cap is required'}), 400
+        
+        # Validate industry is one of the allowed categories
+        allowed_industries = ['Technology', 'Healthcare', 'Financials', 'Energy', 'Consumer', 
+                             'Industrial', 'Communication', 'Utilities', 'Real Estate', 'Materials', 'ETFs']
+        if industry not in allowed_industries:
+            return jsonify({'error': f'Industry must be one of: {", ".join(allowed_industries)}'}), 400
+        
+        # Load stocks.json
+        import os
+        from pathlib import Path
+        json_path = Path(__file__).parent / 'stocks.json'
+        
+        if not json_path.exists():
+            return jsonify({'error': 'stocks.json file not found'}), 500
+        
+        # Read current data
+        with open(json_path, 'r', encoding='utf-8') as f:
+            stocks = json.load(f)
+        
+        # Check if ticker already exists
+        if ticker in stocks:
+            return jsonify({'error': f'Ticker {ticker} already exists in stocks.json'}), 400
+        
+        # Add new ticker
+        stocks[ticker] = {
+            'name': name,
+            'industry': industry,
+            'market_cap': int(market_cap)
+        }
+        
+        # Save back to file
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(stocks, f, indent=2, ensure_ascii=False)
+        
+        # Invalidate cache in LayoffTracker
+        # This is done by clearing the cache attribute on the next instance
+        # We can't directly access the instance, but the cache will be invalidated
+        # on the next file modification time check
+        
+        return jsonify({
+            'success': True,
+            'message': f'Ticker {ticker} added successfully',
+            'ticker': ticker,
+            'name': name,
+            'industry': industry,
+            'market_cap': market_cap
+        })
+        
+    except json.JSONDecodeError as e:
+        return jsonify({'error': f'Invalid JSON in stocks.json: {str(e)}'}), 500
+    except IOError as e:
+        return jsonify({'error': f'Error reading/writing stocks.json: {str(e)}'}), 500
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[ADD TICKER API ERROR] {error_trace}")
+        return jsonify({'error': f'Error adding ticker: {str(e)}'}), 500
+
+@app.route('/api/remove-ticker', methods=['POST'])
+def remove_ticker():
+    """Remove a ticker from stocks.json"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        ticker = data.get('ticker', '').strip().upper()
+        
+        # Validate required fields
+        if not ticker:
+            return jsonify({'error': 'Ticker is required'}), 400
+        
+        # Load stocks.json
+        import os
+        from pathlib import Path
+        json_path = Path(__file__).parent / 'stocks.json'
+        
+        if not json_path.exists():
+            return jsonify({'error': 'stocks.json file not found'}), 500
+        
+        # Read current data
+        with open(json_path, 'r', encoding='utf-8') as f:
+            stocks = json.load(f)
+        
+        # Check if ticker exists
+        if ticker not in stocks:
+            return jsonify({'error': f'Ticker {ticker} not found in stocks.json'}), 404
+        
+        # Get ticker info before removal (for response)
+        ticker_info = stocks[ticker].copy()
+        
+        # Remove ticker
+        del stocks[ticker]
+        
+        # Save back to file (sorted by ticker)
+        sorted_stocks = dict(sorted(stocks.items()))
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(sorted_stocks, f, indent=2, ensure_ascii=False)
+        
+        # Invalidate cache in LayoffTracker
+        # This is done by clearing the cache attribute on the next instance
+        # We can't directly access the instance, but the cache will be invalidated
+        # on the next file modification time check
+        
+        return jsonify({
+            'success': True,
+            'message': f'Ticker {ticker} removed successfully',
+            'ticker': ticker,
+            'name': ticker_info.get('name', ''),
+            'industry': ticker_info.get('industry', ''),
+            'market_cap': ticker_info.get('market_cap', 0)
+        })
+        
+    except json.JSONDecodeError as e:
+        return jsonify({'error': f'Invalid JSON in stocks.json: {str(e)}'}), 500
+    except IOError as e:
+        return jsonify({'error': f'Error reading/writing stocks.json: {str(e)}'}), 500
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[REMOVE TICKER API ERROR] {error_trace}")
+        return jsonify({'error': f'Error removing ticker: {str(e)}'}), 500
 
 @app.route('/api/ai-opinion-score', methods=['POST'])
 def get_ai_opinion_score():
@@ -1246,5 +1704,54 @@ def get_ai_opinion_explanation():
     return get_ai_opinion()
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=8082)
+    # Disable automatic dotenv loading to avoid permission issues
+    import os
+    os.environ['FLASK_SKIP_DOTENV'] = '1'
+    
+    # Redirect stdout and stderr to a log file so we can read server output
+    SERVER_LOG_FILE = 'server_output.log'
+    log_file = open(SERVER_LOG_FILE, 'a', encoding='utf-8')
+    
+    # Create a class that writes to both console and file
+    class TeeOutput:
+        def __init__(self, *files):
+            self.files = files
+        def write(self, obj):
+            for f in self.files:
+                f.write(obj)
+                f.flush()
+        def flush(self):
+            for f in self.files:
+                f.flush()
+    
+    # Redirect stdout and stderr to both console and file
+    import sys
+    sys.stdout = TeeOutput(sys.stdout, log_file)
+    sys.stderr = TeeOutput(sys.stderr, log_file)
+    
+    print("=" * 60)
+    print("Starting Flask server...")
+    print("Server will be available at: http://127.0.0.1:8082")
+    print(f"Server output is being logged to: {SERVER_LOG_FILE}")
+    print("=" * 60)
+    
+    try:
+        app.run(debug=True, host='127.0.0.1', port=8082, use_reloader=False)
+    except OSError as e:
+        if "Operation not permitted" in str(e) or e.errno == 1:
+            print("\n" + "=" * 60)
+            print("ERROR: Cannot bind to port 8082")
+            print("This is a macOS security restriction.")
+            print("\nPlease run this command in your terminal:")
+            print("  cd '/Users/avi.horowitz/Documents/LayoffTracker -10'")
+            print("  python3 app.py")
+            print("=" * 60)
+        else:
+            print(f"\nError starting server: {e}")
+            print("Trying port 8083...")
+            try:
+                app.run(debug=True, host='127.0.0.1', port=8083, use_reloader=False)
+            except Exception as e2:
+                print(f"Failed on port 8083: {e2}")
+                raise
 

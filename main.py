@@ -25,7 +25,8 @@ from config import (
     LAYOFF_KEYWORDS, MIN_LAYOFF_PERCENTAGE, LOOKBACK_DAYS,
     PRIXE_API_KEY, PRIXE_BASE_URL, PRIXE_PRICE_ENDPOINT,
     SEC_EDGAR_BASE_URL, SEC_EDGAR_SEARCH_URL, SEC_EDGAR_COMPANY_API, SEC_USER_AGENT,
-    EVENT_TYPES, MAX_ARTICLES_TO_PROCESS, DEDUPLICATE_BY_COMPANY
+    EVENT_TYPES, MAX_ARTICLES_TO_PROCESS, DEDUPLICATE_BY_COMPANY,
+    CLAUDE_API_KEY
 )
 
 NEWSAPI_MAX_LOOKBACK_DAYS = 30  # NewsAPI free/business tiers limit historical access
@@ -34,6 +35,7 @@ NEWSAPI_MAX_LOOKBACK_DAYS = 30  # NewsAPI free/business tiers limit historical a
 class LayoffTracker:
     def __init__(self):
         self.layoffs = []
+        self.debug_log_file = 'events_filter_debug.log'
         
         # Fix yfinance SSL issues by using system certificates
         if YFINANCE_AVAILABLE:
@@ -118,9 +120,8 @@ class LayoffTracker:
         self.failed_tickers = set()  # Cache tickers that returned 404s to avoid retrying
         # Hardcoded list of tickers known to not exist in Prixe.io (404 errors)
         self.invalid_tickers = {'CPSS', 'EPDU', 'MITI'}
-        # Claude API configuration
-        import os
-        self.claude_api_key = os.getenv('CLAUDE_API_KEY', '')
+        # Claude API configuration - use hardcoded value from config.py
+        self.claude_api_key = CLAUDE_API_KEY
         self.claude_api_url = 'https://api.anthropic.com/v1/messages'
         self.ai_prediction_cache = {}  # Cache AI predictions by article URL
         
@@ -142,6 +143,20 @@ class LayoffTracker:
         self._clear_stale_intraday_cache()
         # Load SEC EDGAR company list on initialization
         self._load_sec_companies()
+    
+    def _write_debug_log(self, message):
+        """Write debug message to log file"""
+        try:
+            import os
+            # Use absolute path to ensure we can write
+            log_path = os.path.join(os.getcwd(), self.debug_log_file)
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(message)
+                f.flush()  # Ensure it's written immediately
+        except Exception as e:
+            # Log the error to stderr so we can see it
+            import sys
+            print(f"[DEBUG LOG ERROR] Failed to write to {self.debug_log_file}: {e}", file=sys.stderr)
     
     def _clear_stale_intraday_cache(self):
         """Clear intraday cache entries for dates >60 days old"""
@@ -2808,7 +2823,15 @@ Do not include any explanation, additional text, or formatting. Just the four va
             print(f"Error getting stock price on date for {ticker}: {e}")
             return None
     
-    def get_top_losers_prixe(self, bearish_date: datetime, industry: Optional[str] = None, logs: Optional[List[str]] = None, find_gainers: bool = False) -> List[tuple[str, float, Dict]]:
+    def get_top_losers_prixe(
+        self,
+        bearish_date: datetime,
+        industry: Optional[str] = None,
+        logs: Optional[List[str]] = None,
+        find_gainers: bool = False,
+        flexible_days: int = 0,
+        ticker_filter: Optional[List[str]] = None
+    ) -> List[tuple[str, float, Dict, str]]:
         """Identify top losing or gaining stocks using Prixe.io data (reliable, works with SSL issues)
         
         Args:
@@ -2816,11 +2839,13 @@ Do not include any explanation, additional text, or formatting. Just the four va
             industry: Optional industry filter
             logs: Optional list to append log messages to
             find_gainers: If True, find stocks that increased (bullish), if False, find stocks that dropped (bearish)
+            flexible_days: Number of days to check before/after bearish_date (0 = exact date only)
             
         Returns:
-            List of tuples: (ticker, pct_change, company_info)
+            List of tuples: (ticker, pct_change, company_info, actual_date)
             For bearish: Sorted by percentage drop (most negative first)
             For bullish: Sorted by percentage gain (most positive first)
+            actual_date: The actual date when the best change occurred (YYYY-MM-DD format)
         """
         try:
             # Get all large-cap companies
@@ -2828,8 +2853,67 @@ Do not include any explanation, additional text, or formatting. Just the four va
             
             # Filter by industry if specified
             if industry and industry != "All Industries":
-                companies = {ticker: info for ticker, info in companies.items() 
-                           if info.get('industry') == industry}
+                companies = {
+                    ticker: info
+                    for ticker, info in companies.items()
+                    if info.get('industry') == industry
+                }
+            
+            # Filter by ticker list if provided
+            missing_tickers_info = {}  # Store Claude-fetched info for missing tickers
+            if ticker_filter:
+                tickers_set = {t.strip().upper() for t in ticker_filter if t.strip()}
+                if tickers_set:
+                    original_count = len(companies)
+                    companies = {
+                        ticker: info
+                        for ticker, info in companies.items()
+                        if ticker in tickers_set
+                    }
+                    if logs is not None:
+                        missing = tickers_set.difference(set(companies.keys()))
+                        initial_matched = len(companies)
+                        logs.append(f"   🎯 Ticker filter applied: {', '.join(sorted(tickers_set))} (matched {initial_matched}/{len(tickers_set)})")
+                        if missing:
+                            logs.append(f"   ⚠️ Unknown or unsupported tickers: {', '.join(sorted(missing))}")
+                            logs.append(f"   🔍 Attempting to fetch company info from Claude API for missing tickers...")
+                            # Fetch info from Claude for missing tickers
+                            fetched_count = 0
+                            failed_tickers = []
+                            for missing_ticker in sorted(missing):
+                                if logs is not None:
+                                    logs.append(f"   🔍 Fetching company info for {missing_ticker} from Claude API...")
+                                ticker_info = self._fetch_ticker_info_from_claude(missing_ticker)
+                                if ticker_info:
+                                    # Add to companies dict temporarily for processing
+                                    companies[missing_ticker] = {
+                                        'name': ticker_info['name'],
+                                        'industry': ticker_info['industry'],
+                                        'market_cap': ticker_info['market_cap']
+                                    }
+                                    # Store info with flag for frontend
+                                    missing_tickers_info[missing_ticker] = {
+                                        'name': ticker_info['name'],
+                                        'industry': ticker_info['industry'],
+                                        'market_cap': ticker_info['market_cap'],
+                                        'size_category': ticker_info.get('size_category', 'Unknown'),
+                                        'is_missing_from_list': True
+                                    }
+                                    fetched_count += 1
+                                    if logs is not None:
+                                        logs.append(f"   ✅ Fetched info for {missing_ticker}: {ticker_info['name']} ({ticker_info['industry']}, {ticker_info.get('size_category', 'Unknown')})")
+                                else:
+                                    failed_tickers.append(missing_ticker)
+                                    if logs is not None:
+                                        logs.append(f"   ❌ Failed to fetch info for {missing_ticker} from Claude API (network error or ticker not found)")
+                            
+                            # Update the matched count in the log if we fetched any
+                            if fetched_count > 0:
+                                final_matched = len(companies)
+                                logs.append(f"   📊 Updated: {final_matched}/{len(tickers_set)} tickers available for analysis ({fetched_count} fetched from Claude)")
+                            
+                            if failed_tickers:
+                                logs.append(f"   ⚠️ Could not process {len(failed_tickers)} ticker(s): {', '.join(failed_tickers)} (Claude API unavailable or ticker not found)")
             
             # Helper function to append and print logs (for real-time streaming)
             def add_log_prixe(message):
@@ -2837,12 +2921,25 @@ Do not include any explanation, additional text, or formatting. Just the four va
                     logs.append(message)
                 print(message)  # Print to stdout for real-time streaming
             
+            # Check if we have any companies to process
+            if len(companies) == 0:
+                if logs is not None:
+                    if ticker_filter:
+                        add_log_prixe(f"   ❌ No valid tickers to process. All tickers in filter were not found in stocks.json and Claude API failed to fetch their info.")
+                    else:
+                        add_log_prixe(f"   ❌ No companies found matching the criteria.")
+                return []
+            
             if logs is not None:
                 if find_gainers:
                     add_log_prixe(f"   📊 Using Prixe.io to calculate gains for {len(companies)} stocks...")
                 else:
                     add_log_prixe(f"   📊 Using Prixe.io to calculate drops for {len(companies)} stocks...")
                 add_log_prixe(f"   📅 Date: {bearish_date.strftime('%Y-%m-%d')}")
+                # Check if date is in the future
+                now = datetime.now(timezone.utc)
+                if bearish_date > now:
+                    add_log_prixe(f"   ⚠️  Warning: Date is in the future. Prixe.io only has historical data up to today.")
             
             stocks = []  # Changed from 'losers' to 'stocks' to handle both gainers and losers
             processed = 0
@@ -2853,84 +2950,141 @@ Do not include any explanation, additional text, or formatting. Just the four va
             from concurrent.futures import ThreadPoolExecutor, as_completed
             
             def process_ticker(ticker):
-                """Process a single ticker to calculate drop - optimized to use 1 API call"""
+                """Process a single ticker to calculate drop - optimized to use 1 API call
+                Supports flexible date lookup to find best change within date range
+                """
                 try:
-                    # OPTIMIZATION: Fetch price history once (covers both bearish_date and previous days)
-                    # This replaces 2+ separate API calls
-                    start_date = bearish_date - timedelta(days=5)
-                    end_date = bearish_date + timedelta(days=1)
+                    # Check if date is in the future
+                    now = datetime.now(timezone.utc)
+                    if bearish_date > now:
+                        # Date is in the future - Prixe.io only has historical data
+                        if logs is not None and ticker == tickers[0]:  # Only log once for first ticker
+                            add_log_prixe(f"   ⚠️  Warning: Date {bearish_date.strftime('%Y-%m-%d')} is in the future. Prixe.io only has historical data.")
+                        return None
+                    
+                    # Calculate date range for flexible lookup
+                    if flexible_days > 0:
+                        # Use trading days (weekdays) for the ±N window
+                        min_check_date = self.get_nth_trading_day_before(bearish_date, flexible_days)
+                        max_check_date = self.get_nth_trading_day_after(bearish_date, flexible_days)
+                        # Fetch wider range to ensure we have previous day data (also in trading days)
+                        start_date = self.get_nth_trading_day_before(min_check_date, 5)
+                        end_date = self.get_nth_trading_day_after(max_check_date, 1)
+                    else:
+                        # Exact date only (original behavior)
+                        min_check_date = bearish_date
+                        max_check_date = bearish_date
+                        start_date = bearish_date - timedelta(days=5)
+                        end_date = bearish_date + timedelta(days=1)
+                    
                     price_history = self.get_stock_price_history(ticker, start_date, end_date)
                     
                     if not price_history:
                         return None
                     
-                    # Extract bearish date price from history
-                    # Use the selected date (or last trading day on/before it) for all stocks
-                    target_date_str = bearish_date.strftime('%Y-%m-%d')
-                    
-                    # Sort by date to find previous trading day
+                    # Sort by date
                     sorted_history = sorted(price_history, key=lambda x: x.get('date', ''))
                     
-                    bearish_price = None
-                    prev_price = None
-                    
-                    # Find the most recent previous trading day for the selected date
-                    most_recent_prev_date = None
-                    most_recent_prev_price = None
-                    
-                    for entry in sorted_history:
-                        entry_date = entry.get('date', '')
-                        price = entry.get('price')
+                    def find_best_change_in_range():
+                        """Find the best (most negative for bearish, most positive for bullish) change within flexible date range"""
+                        best_pct_change = None
+                        best_date = None
+                        best_price = None
+                        best_prev_price = None
                         
-                        if entry_date == target_date_str:
-                            bearish_price = price
-                        elif entry_date < target_date_str:
-                            # This is a previous trading day - keep the most recent one
-                            if most_recent_prev_date is None or entry_date > most_recent_prev_date:
-                                most_recent_prev_date = entry_date
-                                most_recent_prev_price = price
-                    
-                    # If selected date is not a trading day, use the last trading day on/before it
-                    if bearish_price is None and most_recent_prev_price is not None:
-                        bearish_price = most_recent_prev_price
-                        # Find the previous trading day before the one we just used
-                        prev_prev_date = None
-                        prev_prev_price = None
-                        for entry in sorted_history:
+                        # Convert dates to strings for comparison
+                        min_date_str = min_check_date.strftime('%Y-%m-%d')
+                        max_date_str = max_check_date.strftime('%Y-%m-%d')
+                        
+                        # Iterate through all dates in the flexible range
+                        for i, entry in enumerate(sorted_history):
                             entry_date = entry.get('date', '')
                             price = entry.get('price')
-                            if entry_date and entry_date < most_recent_prev_date:
-                                if prev_prev_date is None or entry_date > prev_prev_date:
-                                    prev_prev_date = entry_date
-                                    prev_prev_price = price
-                        if prev_prev_price is not None:
-                            prev_price = prev_prev_price
-                        else:
-                            prev_price = most_recent_prev_price
-                    else:
-                        prev_price = most_recent_prev_price
+                            
+                            if not entry_date or price is None:
+                                continue
+                            
+                            # Check if this date is within the flexible range
+                            if entry_date < min_date_str or entry_date > max_date_str:
+                                continue
+                            
+                            # Find previous trading day (before this entry)
+                            prev_price = None
+                            for j in range(i - 1, -1, -1):
+                                prev_entry = sorted_history[j]
+                                prev_entry_date = prev_entry.get('date', '')
+                                prev_entry_price = prev_entry.get('price')
+                                if prev_entry_date and prev_entry_price is not None and prev_entry_date < entry_date:
+                                    prev_price = prev_entry_price
+                                    break
+                            
+                            if prev_price is None or prev_price == 0:
+                                continue
+                            
+                            # Calculate percentage change
+                            pct_change = ((price - prev_price) / prev_price) * 100
+                            
+                            # Check if this is the best change so far
+                            if best_pct_change is None:
+                                best_pct_change = pct_change
+                                best_date = entry_date
+                                best_price = price
+                                best_prev_price = prev_price
+                            else:
+                                if find_gainers:
+                                    # For bullish: want most positive change
+                                    if pct_change > best_pct_change:
+                                        best_pct_change = pct_change
+                                        best_date = entry_date
+                                        best_price = price
+                                        best_prev_price = prev_price
+                                else:
+                                    # For bearish: want most negative change
+                                    if pct_change < best_pct_change:
+                                        best_pct_change = pct_change
+                                        best_date = entry_date
+                                        best_price = price
+                                        best_prev_price = prev_price
+                        
+                        return best_pct_change, best_date, best_price, best_prev_price
                     
-                    if bearish_price is None or prev_price is None or prev_price == 0:
+                    # Find best change in range
+                    best_pct_change, best_date, best_price, best_prev_price = find_best_change_in_range()
+                    
+                    if best_pct_change is None or best_price is None or best_prev_price is None or best_prev_price == 0:
                         return None
                     
-                    # Calculate percentage change
-                    pct_change = ((bearish_price - prev_price) / prev_price) * 100
+                    # Get company info and add missing ticker flag if applicable
+                    company_info = companies[ticker].copy()
+                    if ticker in missing_tickers_info:
+                        company_info['is_missing_from_list'] = True
+                        company_info['size_category'] = missing_tickers_info[ticker].get('size_category', 'Unknown')
                     
                     # Return stocks based on find_gainers flag
                     if find_gainers:
                         # Only return stocks that increased (bullish)
-                        if pct_change > 0:
-                            return (ticker, pct_change, companies[ticker])
+                        if best_pct_change > 0:
+                            return (ticker, best_pct_change, company_info, best_date)
                     else:
                         # Only return stocks that dropped (bearish)
-                        if pct_change < 0:
-                            return (ticker, pct_change, companies[ticker])
+                        if best_pct_change < 0:
+                            return (ticker, best_pct_change, company_info, best_date)
                     return None
                 except Exception as e:
                     return None
             
             # Process in parallel (limit to 10 workers to avoid Prixe.io rate limits)
             tickers = list(companies.keys())
+            
+            # Guard against empty tickers list (should not happen due to check above, but double-check for safety)
+            if len(tickers) == 0:
+                if logs is not None:
+                    if ticker_filter:
+                        add_log_prixe(f"   ❌ No valid tickers to process. All tickers in filter were not found in stocks.json and Claude API failed to fetch their info.")
+                    else:
+                        add_log_prixe(f"   ❌ No companies found matching the criteria.")
+                return []
+            
             max_workers = min(len(tickers), 10)  # Reduced from 20 to avoid 429 rate limit errors
             
             if logs is not None:
@@ -3545,22 +3699,53 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
             traceback.print_exc()
             return []
     
-    def analyze_recovery_history(self, price_history: List[Dict], pct_threshold: float, bearish_date_str: str) -> List[Dict]:
+    def _count_trading_days_between(self, start_date: datetime, end_date: datetime) -> int:
+        """Count trading days (weekdays) between start_date (exclusive) and end_date (inclusive)."""
+        if not start_date or not end_date or end_date <= start_date:
+            return 0
+        
+        current = start_date + timedelta(days=1)
+        count = 0
+        while current <= end_date:
+            if current.weekday() < 5:  # Monday–Friday
+                count += 1
+            current += timedelta(days=1)
+        return count
+    
+    def analyze_recovery_history(self, price_history: List[Dict], pct_threshold: float, bearish_date_str: str, events: List[Dict] = None) -> List[Dict]:
         """Analyze 120 days of price history to find similar drops and recovery times
         
         Args:
             price_history: List of price data points (sorted by date)
             pct_threshold: Minimum drop percentage (e.g., -5.0 for -5%)
             bearish_date_str: Current bearish date (exclude this from analysis)
+            events: List of events (earnings/dividends) from 120 days before bearish_date to bearish_date
         
         Returns:
-            List of dicts with: drop_date, drop_pct, recovery_days, recovery_date
-            Returns empty list if no similar drops found
+            Dict with:
+              - 'items': list of per-drop dicts (drop_date, drop_pct, recovery_days, recovery_trading_days, recovery_date, recovery_pct, event_info)
+              - 'summary': aggregated metrics for 7 trading days and 40 calendar days
         """
-        recovery_history = []
+        recovery_items: List[Dict] = []
         
         if not price_history or len(price_history) < 2:
-            return recovery_history
+            return {
+                'items': [],
+                'summary': {
+                    'within_7_trading_days': {
+                        'count_recovered': 0,
+                        'total_events': 0,
+                        'percentage': 0.0,
+                    },
+                    'within_40_days': {
+                        'count_recovered': 0,
+                        'total_events': 0,
+                        'percentage': 0.0,
+                        'avg_recovery_pct': 0.0,
+                        'avg_days_to_recover': 0.0,
+                    },
+                },
+            }
         
         # Threshold range: ±1% (e.g., if -5%, find -4% and above/worse)
         # For negative thresholds, "above" means more negative (worse drops)
@@ -3585,7 +3770,7 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
             # Calculate drop percentage (day-over-day)
             drop_pct = ((current_price - prev_price) / prev_price) * 100
             
-            # Check if drop matches threshold: drop_pct <= (threshold + 1%)
+                # Check if drop matches threshold: drop_pct <= (threshold + 1%)
             # For -5% threshold, this means drop_pct <= -4% (finds -4% and worse)
             if drop_pct <= max_threshold:
                 # Find recovery (2% bounce from drop price)
@@ -3623,18 +3808,98 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                             recovery_pct = None
                         break
                 
-                recovery_history.append({
+                # Compute trading days to recover if we have both dates
+                recovery_trading_days = None
+                if recovery_days is not None and recovery_date is not None:
+                    try:
+                        drop_dt_td = datetime.strptime(current_date, '%Y-%m-%d')
+                        recovery_dt_td = datetime.strptime(recovery_date, '%Y-%m-%d')
+                        recovery_trading_days = self._count_trading_days_between(drop_dt_td, recovery_dt_td)
+                    except ValueError:
+                        recovery_trading_days = None
+                
+                # Event matching is now done in frontend - no longer needed here
+                recovery_item = {
                     'drop_date': current_date,
                     'drop_pct': round(drop_pct, 2),
                     'recovery_days': recovery_days,
+                    'recovery_trading_days': recovery_trading_days,
                     'recovery_date': recovery_date,
                     'recovery_pct': round(recovery_pct, 2) if recovery_pct is not None else None
-                })
+                }
+                recovery_items.append(recovery_item)
         
         # Sort by drop_date (most recent first)
-        recovery_history.sort(key=lambda x: x.get('drop_date', ''), reverse=True)
+        recovery_items.sort(key=lambda x: x.get('drop_date', ''), reverse=True)
         
-        return recovery_history
+        total_drops = len(recovery_items)
+        
+        # Debug: Count how many drops recovered within 7 trading days vs didn't
+        recovered_within_7 = sum(1 for item in recovery_items 
+                                 if item.get('recovery_trading_days') is not None 
+                                 and item.get('recovery_trading_days') <= 7)
+        didnt_recover_within_7 = total_drops - recovered_within_7
+        items_with_events = sum(1 for item in recovery_items if item.get('event_info') is not None)
+        print(f"[RECOVERY HISTORY SUMMARY] Total drops: {total_drops}, Recovered within 7 trading days: {recovered_within_7}, Didn't recover within 7: {didnt_recover_within_7}, Items with events: {items_with_events}")
+        
+        # 7-trading-day metric
+        recovered_within_7_trading = [
+            item for item in recovery_items
+            if item.get('recovery_pct') is not None
+            and item.get('recovery_trading_days') is not None
+            and item['recovery_trading_days'] <= 7
+        ]
+        
+        # 40-calendar-day metric (existing behavior)
+        recovered_within_40_days = [
+            item for item in recovery_items
+            if item.get('recovery_pct') is not None
+            and item.get('recovery_days') is not None
+            and item['recovery_days'] <= 40
+        ]
+        
+        all_recovered_calendar = [
+            item for item in recovery_items
+            if item.get('recovery_pct') is not None
+            and item.get('recovery_days') is not None
+        ]
+        
+        # Aggregate stats
+        count_7 = len(recovered_within_7_trading)
+        count_40 = len(recovered_within_40_days)
+        
+        pct_7 = (count_7 / total_drops * 100.0) if total_drops > 0 else 0.0
+        pct_40 = (count_40 / total_drops * 100.0) if total_drops > 0 else 0.0
+        
+        avg_recovery_pct_40 = (
+            sum(item['recovery_pct'] for item in recovered_within_40_days) / count_40
+            if count_40 > 0 else 0.0
+        )
+        
+        avg_days_to_recover = (
+            sum(item['recovery_days'] for item in all_recovered_calendar) / len(all_recovered_calendar)
+            if all_recovered_calendar else 0.0
+        )
+        
+        summary = {
+            'within_7_trading_days': {
+                'count_recovered': count_7,
+                'total_events': total_drops,
+                'percentage': round(pct_7, 1),
+            },
+            'within_40_days': {
+                'count_recovered': count_40,
+                'total_events': total_drops,
+                'percentage': round(pct_40, 1),
+                'avg_recovery_pct': round(avg_recovery_pct_40, 1),
+                'avg_days_to_recover': round(avg_days_to_recover, 1),
+            },
+        }
+        
+        return {
+            'items': recovery_items,
+            'summary': summary,
+        }
     
     def _calculate_technical_indicators(self, price_history: List[Dict], current_price: float, bearish_price: float) -> Dict[str, any]:
         """Calculate technical indicators from price history
@@ -4157,7 +4422,16 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
         
         return recovery_map.get(industry, default)
     
-    def get_bearish_analytics(self, bearish_date: datetime, target_date: datetime, industry: Optional[str] = None, filter_type: str = 'bearish', pct_threshold: Optional[float] = None) -> tuple[List[Dict], List[str]]:
+    def get_bearish_analytics(
+        self,
+        bearish_date: datetime,
+        target_date: datetime,
+        industry: Optional[str] = None,
+        filter_type: str = 'bearish',
+        pct_threshold: Optional[float] = None,
+        flexible_days: int = 0,
+        ticker_filter: Optional[str] = None
+    ) -> tuple[List[Dict], List[str]]:
         """Get top losing large-cap stocks on bearish date and their recovery to target date
         
         Args:
@@ -4181,9 +4455,16 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
             add_log(f"📅 Bearish Date: {bearish_date.strftime('%Y-%m-%d')}")
             add_log(f"📅 Target Date: {target_date.strftime('%Y-%m-%d')}")
             add_log(f"🏭 Industry Filter: {industry if industry and industry != 'All Industries' else 'All Industries'}")
+            if ticker_filter:
+                add_log(f"🎯 Ticker Filter: {ticker_filter}")
             if pct_threshold is not None:
                 filter_desc = f"drop <= {pct_threshold}%" if filter_type == 'bearish' else f"recovery >= {pct_threshold}%"
                 add_log(f"🔍 Percentage Filter: {filter_type.title()} - {filter_desc}")
+            if flexible_days > 0:
+                # Log using trading-day based window for clarity
+                min_date = self.get_nth_trading_day_before(bearish_date, flexible_days).strftime('%Y-%m-%d')
+                max_date = self.get_nth_trading_day_after(bearish_date, flexible_days).strftime('%Y-%m-%d')
+                add_log(f"📅 Flexible Date Range: {min_date} to {max_date} (±{flexible_days} trading days)")
             add_log("")
             
             # Calculate total API calls estimate for progress tracking
@@ -4210,8 +4491,20 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
             
             stocks = []
             
+            # Parse ticker_filter into list if provided
+            ticker_list: Optional[List[str]] = None
+            if ticker_filter:
+                ticker_list = [t.strip().upper() for t in str(ticker_filter).split(',') if t.strip()]
+
             try:
-                stocks = self.get_top_losers_prixe(bearish_date, industry, logs=logs, find_gainers=find_gainers)
+                stocks = self.get_top_losers_prixe(
+                    bearish_date,
+                    industry,
+                    logs=logs,
+                    find_gainers=find_gainers,
+                    flexible_days=flexible_days,
+                    ticker_filter=ticker_list
+                )
                 
                 # Update estimate with actual number of stocks found
                 self.total_api_calls_estimated = len(companies) + len(stocks)
@@ -4255,7 +4548,7 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
             # Process stock function (for parallel execution)
             def process_stock(stock_data):
                 """Process a single stock - optimized to use 1 API call instead of 3"""
-                ticker, pct_change, company_info, idx = stock_data
+                ticker, pct_change, company_info, actual_date_from_lookup, idx = stock_data
                 try:
                     # OPTIMIZATION: Fetch price history once (covers both bearish_date and target_date)
                     # Start 90 days before bearish_date to ensure:
@@ -4275,14 +4568,24 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                     if not price_history:
                         return None
                     
-                    # Use the selected date (or last trading day on/before it) for all stocks
-                    # This ensures all stocks use the same date as requested
-                    base_price, actual_bearish_date = self.extract_price_from_history(price_history, bearish_date)
+                    # Use the actual date from flexible lookup (or fallback to bearish_date)
+                    # Parse the actual_date string to datetime for extract_price_from_history
+                    if actual_date_from_lookup:
+                        try:
+                            actual_bearish_date_dt = datetime.strptime(actual_date_from_lookup, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+                            base_price, actual_bearish_date = self.extract_price_from_history(price_history, actual_bearish_date_dt)
+                        except:
+                            # Fallback to original bearish_date if parsing fails
+                            base_price, actual_bearish_date = self.extract_price_from_history(price_history, bearish_date)
+                    else:
+                        # Fallback to original bearish_date if no actual_date provided
+                        base_price, actual_bearish_date = self.extract_price_from_history(price_history, bearish_date)
+                    
                     if base_price is None:
                         return None
                     
-                    # Use actual trading date if different from requested date (for weekends/holidays)
-                    actual_bearish_date_str = actual_bearish_date if actual_bearish_date else bearish_date.strftime('%Y-%m-%d')
+                    # Use actual trading date from flexible lookup (or extracted date)
+                    actual_bearish_date_str = actual_date_from_lookup if actual_date_from_lookup else (actual_bearish_date if actual_bearish_date else bearish_date.strftime('%Y-%m-%d'))
                     
                     # Find the most recent previous trading day to calculate pct_change
                     sorted_history = sorted(price_history, key=lambda x: x.get('date', ''))
@@ -4331,10 +4634,23 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                     recovery_strength = self._get_recovery_strength(stock_industry)
                     
                     # Analyze recovery history (similar drops in past 120 days)
+                    # Note: Events are now fetched separately in add_events_during_to_stock and will be matched in frontend
                     recovery_history = []
+                    recovery_history_summary = None
                     if pct_threshold is not None and filter_type == 'bearish':
                         # Only analyze for bearish drops, using the threshold
-                        recovery_history = self.analyze_recovery_history(price_history, pct_threshold, actual_bearish_date_str)
+                        # No longer passing events - frontend will match events from earnings_dividends.events_during
+                        print(f"[RECOVERY HISTORY] Calling analyze_recovery_history for {ticker} (events will be matched in frontend)")
+                        rh_result = self.analyze_recovery_history(price_history, pct_threshold, actual_bearish_date_str, None)
+                        if isinstance(rh_result, dict):
+                            recovery_history = rh_result.get('items', [])
+                            recovery_history_summary = rh_result.get('summary')
+                        else:
+                            # Backward compatibility in case analyze_recovery_history returns a list
+                            recovery_history = rh_result
+                        
+                        # Event matching is now done in frontend - no post-processing needed
+                        print(f"[RECOVERY HISTORY] {ticker}: {len(recovery_history)} recovery items (events will be matched in frontend)")
                     
                     # OPTIMIZATION: Skip technical indicators and earnings checks here - will be done after percentage filter
                     # This saves CPU time and API calls for stocks that will be filtered out
@@ -4346,7 +4662,7 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                         'has_next_events': False
                     }
                     
-                    return {
+                    result = {
                         'ticker': ticker,
                         'company_name': company_info.get('name', ticker),
                         'industry': stock_industry,
@@ -4367,8 +4683,17 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                         'base_price': base_price,  # Keep base_price for indicator calculation
                         'technical_indicators': technical_indicators,
                         'earnings_dividends': earnings_dividends,
-                        'recovery_history': recovery_history  # Historical similar drops and recovery times
+                        'recovery_history': recovery_history,  # Historical similar drops and recovery times
+                        'recovery_history_summary': recovery_history_summary
                     }
+                    
+                    # Preserve is_missing_from_list flag if present
+                    if company_info.get('is_missing_from_list'):
+                        result['is_missing_from_list'] = True
+                        if 'size_category' in company_info:
+                            result['size_category'] = company_info['size_category']
+                    
+                    return result
                 except Exception as e:
                     return ('error', ticker, str(e))
             
@@ -4379,8 +4704,8 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
             max_workers = min(10, total_losers)  # Reduced to 10 workers to avoid Prixe.io rate limits (429 errors)
             
             # Prepare stock data with index for progress tracking
-            stock_data_list = [(ticker, pct_change, company_info, idx) 
-                             for idx, (ticker, pct_change, company_info) in enumerate(losers, 1)]
+            stock_data_list = [(ticker, pct_change, company_info, actual_date, idx) 
+                             for idx, (ticker, pct_change, company_info, actual_date) in enumerate(losers, 1)]
             
             add_log(f"   🚀 Using {max_workers} parallel workers for faster processing...")
             
@@ -4396,7 +4721,7 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                     completed += 1
                     stock_data = future_to_stock[future]
                     ticker = stock_data[0]
-                    idx = stock_data[3]
+                    idx = stock_data[4]
                     
                     # Show progress every 10% or every 5 stocks
                     progress_interval = max(5, total_losers // 10)
@@ -4511,21 +4836,37 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                 add_log(f"   📊 Checking events during period for {len(results)} filtered stocks...")
                 
                 def add_events_during_to_stock(stock_result):
-                    """Add events_during data to a stock result (historical events only)"""
+                    """Add events_during data to a stock result (historical events only)
+                    Extended to 120 days before bearish_date for recovery history analysis"""
                     ticker = stock_result.get('ticker')
+                    # Get reference to self for logging
+                    tracker_self = self
+                    
+                    # TEST: Verify function is being called
+                    test_msg = f"[EVENTS FILTER] {ticker}: FUNCTION CALLED - Starting events filtering\n"
+                    print(test_msg, end='', flush=True)
                     try:
-                        # Only fetch events_during (between bearish_date and target_date)
-                        # Use future_days=0 to skip next_events fetching
-                        earnings_dividends = self._check_earnings_dividends_sec(ticker, bearish_date, target_date, future_days=0)
+                        tracker_self._write_debug_log(test_msg)
+                    except:
+                        pass
+                    try:
+                        tracker_self._write_debug_log(test_msg)
+                    except Exception as e:
+                        print(f"[DEBUG LOG ERROR] Failed to write test log: {e}", flush=True)
+                    
+                    try:
+                        # Extend fetch to 120 days before bearish_date for recovery history
+                        events_start_date = bearish_date - timedelta(days=120)
+                        # Fetch all events from 120 days before bearish_date to target_date
+                        earnings_dividends = self._check_earnings_dividends_sec(ticker, events_start_date, target_date, future_days=0)
                         
-                        # Also check yfinance for events during period (replaces NASDAQ - much faster, finds more events)
+                        # Also check yfinance for events (replaces NASDAQ - much faster, finds more events)
                         try:
-                            yfinance_result = self._check_earnings_dividends_yfinance(ticker, bearish_date, target_date, future_days=0)
+                            yfinance_result = self._check_earnings_dividends_yfinance(ticker, events_start_date, target_date, future_days=0)
                             if yfinance_result:
                                 yfinance_events_during = yfinance_result.get('events_during', [])
                                 if yfinance_events_during:
                                     earnings_dividends['events_during'].extend(yfinance_events_during)
-                                    earnings_dividends['has_events_during'] = len(earnings_dividends['events_during']) > 0
                                     
                                     # Remove duplicates
                                     seen_events = set()
@@ -4536,9 +4877,87 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                                             seen_events.add(event_key)
                                             unique_events.append(event)
                                     earnings_dividends['events_during'] = unique_events
-                                    earnings_dividends['has_events_during'] = len(earnings_dividends['events_during']) > 0
                         except Exception:
                             pass
+                        
+                        # Store full events list for recovery history matching (120 days before bearish_date)
+                        all_events_for_recovery = earnings_dividends.get('events_during', []).copy()
+                        
+                        # Filter events_during to only show events between actual bearish_date and target_date (for "Events During Period" column)
+                        # Use actual bearish_date from stock_result (may differ from parameter if flexible_days was used)
+                        stock_bearish_date = stock_result.get('bearish_date')
+                        parameter_bearish_date = bearish_date.strftime('%Y-%m-%d')
+                        actual_bearish_date_str = stock_bearish_date if stock_bearish_date else parameter_bearish_date
+                        target_date_str = target_date.strftime('%Y-%m-%d')
+                        
+                        # Get original events list before filtering (CRITICAL: copy the list to avoid modifying the original)
+                        original_events = list(earnings_dividends.get('events_during', []))
+                        total_events_before_filter = len(original_events)
+                        
+                        # Debug: Log what we're using for filtering (also write to file)
+                        log_msg = f"[EVENTS FILTER] {ticker}: stock_result.bearish_date={stock_bearish_date}, parameter={parameter_bearish_date}, using={actual_bearish_date_str}, target={target_date_str}\n"
+                        print(log_msg, end='', flush=True)
+                        try:
+                            tracker_self._write_debug_log(log_msg)
+                        except Exception as e:
+                            print(f"[DEBUG LOG ERROR] Failed to write log: {e}", flush=True)
+                        
+                        if original_events:
+                            log_msg = f"[EVENTS FILTER] {ticker}: Original events ({total_events_before_filter}): {[e.get('date') for e in original_events]}\n"
+                            print(log_msg, end='')
+                            tracker_self._write_debug_log(log_msg)
+                        
+                        events_during_period = []
+                        filtered_out_count = 0
+                        for event in original_events:
+                            event_date = event.get('date', '')
+                            if event_date:
+                                # String comparison for YYYY-MM-DD format
+                                if actual_bearish_date_str <= event_date <= target_date_str:
+                                    events_during_period.append(event)
+                                else:
+                                    filtered_out_count += 1
+                                    log_msg = f"[EVENTS FILTER] {ticker}: Filtering out event {event_date} (not in range {actual_bearish_date_str} to {target_date_str})\n"
+                                    print(log_msg, end='')
+                                    tracker_self._write_debug_log(log_msg)
+                            else:
+                                # Skip events without dates
+                                filtered_out_count += 1
+                                log_msg = f"[EVENTS FILTER] {ticker}: Skipping event without date: {event}\n"
+                                print(log_msg, end='')
+                                tracker_self._write_debug_log(log_msg)
+                        
+                        # Set filtered events for display (CRITICAL: replace the list, don't modify in place)
+                        earnings_dividends['events_during'] = events_during_period
+                        earnings_dividends['has_events_during'] = len(events_during_period) > 0
+                        
+                        # Debug logging
+                        log_msg = f"[EVENTS FILTER] {ticker}: ✅ FILTERED {total_events_before_filter} events → {len(events_during_period)} events (filtered out: {filtered_out_count})\n"
+                        print(log_msg, end='')
+                        tracker_self._write_debug_log(log_msg)
+                        
+                        if events_during_period:
+                            log_msg = f"[EVENTS FILTER] {ticker}: Remaining events: {[e.get('date') for e in events_during_period]}\n"
+                            print(log_msg, end='')
+                            tracker_self._write_debug_log(log_msg)
+                        else:
+                            log_msg = f"[EVENTS FILTER] {ticker}: No events in range {actual_bearish_date_str} to {target_date_str}\n"
+                            print(log_msg, end='')
+                            tracker_self._write_debug_log(log_msg)
+                        
+                        # Store full events list for recovery history (separate field)
+                        earnings_dividends['all_events_for_recovery'] = all_events_for_recovery
+                        
+                        # DEBUG: Add debug info to stock_result so we can see it in the response
+                        stock_result['_debug_events_filter'] = {
+                            'bearish_date_used': actual_bearish_date_str,
+                            'target_date': target_date_str,
+                            'events_before_filter': total_events_before_filter,
+                            'events_after_filter': len(events_during_period),
+                            'all_events_count': len(all_events_for_recovery),
+                            'original_event_dates': [e.get('date') for e in original_events] if original_events else [],
+                            'filtered_event_dates': [e.get('date') for e in events_during_period] if events_during_period else []
+                        }
                         
                         # Initialize next_events as empty (will be loaded on-demand)
                         earnings_dividends['next_events'] = []
@@ -4548,9 +4967,28 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                         stock_result['earnings_dividends'] = earnings_dividends
                         return stock_result
                     except Exception as e:
+                        # If events check fails, log the error and use empty result
+                        error_msg = f"[EVENTS FILTER] {ticker}: EXCEPTION in add_events_during_to_stock: {e}\n"
+                        print(error_msg, end='', flush=True)
+                        import traceback
+                        traceback.print_exc()
+                        try:
+                            tracker_self._write_debug_log(error_msg)
+                            tracker_self._write_debug_log(traceback.format_exc())
+                        except:
+                            pass
+                        
+                        # Set debug info even on error
+                        stock_result['_debug_events_filter'] = {
+                            'error': str(e),
+                            'function_called': True,
+                            'exception_occurred': True
+                        }
+                        
                         # If events check fails, use empty result
                         stock_result['earnings_dividends'] = {
                             'events_during': [],
+                            'all_events_for_recovery': [],
                             'next_events': [],
                             'has_events_during': False,
                             'has_next_events': False,
@@ -4798,6 +5236,47 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
             next_day = next_day + timedelta(days=1)
         
         return None
+    
+    def get_nth_trading_day_before(self, dt: datetime, n: int) -> datetime:
+        """Get the Nth trading day (weekday) before the given date.
+        
+        This function treats Monday–Friday as trading days and skips weekends.
+        It does NOT apply an explicit holiday calendar – holidays that fall on
+        weekdays are effectively handled later by the price-history lookup.
+        """
+        if n <= 0:
+            return dt
+        
+        current = dt
+        remaining = n
+        
+        while remaining > 0:
+            current = current - timedelta(days=1)
+            # 0 = Monday, 6 = Sunday; trading days are 0–4
+            if current.weekday() < 5:
+                remaining -= 1
+        
+        return current
+    
+    def get_nth_trading_day_after(self, dt: datetime, n: int) -> datetime:
+        """Get the Nth trading day (weekday) after the given date.
+        
+        This function treats Monday–Friday as trading days and skips weekends.
+        It does NOT apply an explicit holiday calendar – holidays that fall on
+        weekdays are effectively handled later by the price-history lookup.
+        """
+        if n <= 0:
+            return dt
+        
+        current = dt
+        remaining = n
+        
+        while remaining > 0:
+            current = current + timedelta(days=1)
+            if current.weekday() < 5:
+                remaining -= 1
+        
+        return current
     
     def _fetch_price_data_batch(self, ticker: str, start_date: datetime, end_date: datetime, interval: str = '1d') -> Optional[Dict]:
         """Fetch price data for a date range in a single API call
@@ -6523,452 +7002,638 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
         print(f"[REAL ESTATE COMPANIES] Using {len(real_estate_companies)} liquid real estate companies (REITs, developers, services) for search")
         return real_estate_companies
     
+    def _fetch_ticker_info_from_claude(self, ticker: str) -> Optional[Dict[str, any]]:
+        """Fetch company information from Claude API for tickers not in stocks.json
+        
+        Args:
+            ticker: Stock ticker symbol (e.g., 'AAPL')
+            
+        Returns:
+            Dict with keys: 'name', 'industry', 'market_cap', 'size_category' (Large-Cap/Mid-Cap)
+            Returns None if API call fails
+        """
+        if not self.claude_api_key:
+            print(f"[FETCH TICKER INFO] No API key configured")
+            return None
+        
+        # Check if API key is still placeholder
+        if self.claude_api_key == 'sk-ant-api03-YourActualClaudeAPIKeyHere-ReplaceThisWithYourRealKey':
+            print(f"[FETCH TICKER INFO] API key is still using placeholder value.")
+            return None
+        
+        try:
+            prompt = f"""For the stock ticker symbol {ticker}, provide the following information:
+
+1. Company name (full official name)
+2. Industry (must be one of these exact categories: Technology, Healthcare, Financials, Energy, Consumer, Industrial, Communication, Utilities, Real Estate, Materials, ETFs)
+3. Market cap in millions (e.g., 50000 for $50 billion)
+4. Size category (Large-Cap if market cap >= $10 billion, Mid-Cap if between $2-10 billion, Small-Cap if < $2 billion)
+
+Return ONLY valid JSON in this exact format (no markdown, no code blocks, just pure JSON):
+{{
+  "name": "<company name>",
+  "industry": "<industry category>",
+  "market_cap": <number in millions>,
+  "size_category": "<Large-Cap or Mid-Cap or Small-Cap>"
+}}
+
+If you cannot find information for this ticker, return:
+{{
+  "error": "Ticker not found"
+}}"""
+
+            headers = {
+                'x-api-key': self.claude_api_key,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json'
+            }
+            
+            payload = {
+                'model': 'claude-3-5-haiku-20241022',
+                'max_tokens': 500,
+                'messages': [
+                    {
+                        'role': 'user',
+                        'content': prompt
+                    }
+                ]
+            }
+            
+            response = requests.post(self.claude_api_url, headers=headers, json=payload, timeout=30, verify=False)
+            
+            if response.status_code == 200:
+                data = response.json()
+                content = data.get('content', [])
+                if content and len(content) > 0:
+                    text = content[0].get('text', '').strip()
+                    
+                    # Remove markdown code blocks if present
+                    if text.startswith('```'):
+                        lines = text.split('\n')
+                        text = '\n'.join(lines[1:-1]) if len(lines) > 2 else text
+                    if text.startswith('```json'):
+                        lines = text.split('\n')
+                        text = '\n'.join(lines[1:-1]) if len(lines) > 2 else text
+                    
+                    # Parse JSON
+                    import json
+                    try:
+                        result = json.loads(text)
+                        
+                        # Check for error
+                        if 'error' in result:
+                            print(f"[FETCH TICKER INFO] Claude returned error for {ticker}: {result['error']}")
+                            return None
+                        
+                        # Validate required fields
+                        if 'name' not in result or 'industry' not in result or 'market_cap' not in result:
+                            print(f"[FETCH TICKER INFO] Claude response missing required fields for {ticker}")
+                            return None
+                        
+                        # Ensure market_cap is a number
+                        try:
+                            market_cap = float(result['market_cap'])
+                        except (ValueError, TypeError):
+                            print(f"[FETCH TICKER INFO] Invalid market_cap value for {ticker}: {result.get('market_cap')}")
+                            return None
+                        
+                        # Determine size_category if not provided
+                        if 'size_category' not in result:
+                            if market_cap >= 10000:  # $10B+
+                                result['size_category'] = 'Large-Cap'
+                            elif market_cap >= 2000:  # $2B-$10B
+                                result['size_category'] = 'Mid-Cap'
+                            else:
+                                result['size_category'] = 'Small-Cap'
+                        
+                        # Ensure market_cap is stored as number
+                        result['market_cap'] = int(market_cap)
+                        
+                        print(f"[FETCH TICKER INFO] Successfully fetched info for {ticker}: {result['name']} ({result['industry']}, {result['size_category']})")
+                        return result
+                        
+                    except json.JSONDecodeError as e:
+                        print(f"[FETCH TICKER INFO] Failed to parse Claude JSON response for {ticker}: {e}")
+                        print(f"[FETCH TICKER INFO] Response text: {text[:200]}")
+                        return None
+            else:
+                print(f"[FETCH TICKER INFO] Claude API error for {ticker}: {response.status_code} - {response.text[:200]}")
+                return None
+                
+        except Exception as e:
+            print(f"[FETCH TICKER INFO] Exception fetching info for {ticker}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
     def _get_large_cap_companies_with_options(self) -> Dict[str, Dict[str, any]]:
-        """Get hardcoded list of large-cap companies ($10B+ market cap) with active options trading
-        Organized by GICS industry sectors
+        """Get large-cap companies list from JSON file (auto-reloads on change)
+        
+        The JSON file is required. If it's missing or invalid, raises an error.
+        The Python hardcoded list is kept commented out as a backup reference only.
         
         Returns:
             Dictionary mapping ticker to {'name': str, 'industry': str, 'market_cap': float}
         """
-        companies = {
-            # Technology
-            'AAPL': {'name': 'Apple Inc', 'industry': 'Technology', 'market_cap': 3000000},
-            'MSFT': {'name': 'Microsoft Corporation', 'industry': 'Technology', 'market_cap': 3000000},
-            'GOOGL': {'name': 'Alphabet Inc', 'industry': 'Technology', 'market_cap': 2000000},
-            'AMZN': {'name': 'Amazon.com Inc', 'industry': 'Technology', 'market_cap': 1500000},
-            'META': {'name': 'Meta Platforms Inc', 'industry': 'Technology', 'market_cap': 1200000},
-            'NVDA': {'name': 'NVIDIA Corporation', 'industry': 'Technology', 'market_cap': 2000000},
-            'TSLA': {'name': 'Tesla Inc', 'industry': 'Technology', 'market_cap': 800000},
-            'AVGO': {'name': 'Broadcom Inc', 'industry': 'Technology', 'market_cap': 600000},
-            'ORCL': {'name': 'Oracle Corporation', 'industry': 'Technology', 'market_cap': 400000},
-            'CRM': {'name': 'Salesforce Inc', 'industry': 'Technology', 'market_cap': 250000},
-            'INTC': {'name': 'Intel Corporation', 'industry': 'Technology', 'market_cap': 200000},
-            'AMD': {'name': 'Advanced Micro Devices', 'industry': 'Technology', 'market_cap': 250000},
-            'QCOM': {'name': 'QUALCOMM Incorporated', 'industry': 'Technology', 'market_cap': 200000},
-            'CSCO': {'name': 'Cisco Systems Inc', 'industry': 'Technology', 'market_cap': 200000},
-            'NOW': {'name': 'ServiceNow Inc', 'industry': 'Technology', 'market_cap': 150000},
-            'ADBE': {'name': 'Adobe Inc', 'industry': 'Technology', 'market_cap': 250000},
-            'INTU': {'name': 'Intuit Inc', 'industry': 'Technology', 'market_cap': 180000},
-            'MU': {'name': 'Micron Technology Inc', 'industry': 'Technology', 'market_cap': 150000},
-            'TXN': {'name': 'Texas Instruments Incorporated', 'industry': 'Technology', 'market_cap': 170000},
-            'AMAT': {'name': 'Applied Materials Inc', 'industry': 'Technology', 'market_cap': 150000},
-            'LRCX': {'name': 'Lam Research Corporation', 'industry': 'Technology', 'market_cap': 120000},
-            'KLAC': {'name': 'KLA Corporation', 'industry': 'Technology', 'market_cap': 100000},
-            'SNPS': {'name': 'Synopsys Inc', 'industry': 'Technology', 'market_cap': 85000},
-            'CDNS': {'name': 'Cadence Design Systems Inc', 'industry': 'Technology', 'market_cap': 80000},
-            'FTNT': {'name': 'Fortinet Inc', 'industry': 'Technology', 'market_cap': 50000},
-            'PANW': {'name': 'Palo Alto Networks Inc', 'industry': 'Technology', 'market_cap': 100000},
-            'CRWD': {'name': 'CrowdStrike Holdings Inc', 'industry': 'Technology', 'market_cap': 80000},
-            'ZS': {'name': 'Zscaler Inc', 'industry': 'Technology', 'market_cap': 30000},
-            'NET': {'name': 'Cloudflare Inc', 'industry': 'Technology', 'market_cap': 30000},
-            'DDOG': {'name': 'Datadog Inc', 'industry': 'Technology', 'market_cap': 40000},
-            'TEAM': {'name': 'Atlassian Corporation', 'industry': 'Technology', 'market_cap': 60000},
-            'ZM': {'name': 'Zoom Video Communications Inc', 'industry': 'Technology', 'market_cap': 25000},
-            'DOCN': {'name': 'DigitalOcean Holdings Inc', 'industry': 'Technology', 'market_cap': 3000},
-            'ESTC': {'name': 'Elastic N.V.', 'industry': 'Technology', 'market_cap': 10000},
-            'MDB': {'name': 'MongoDB Inc', 'industry': 'Technology', 'market_cap': 30000},
-            'OKTA': {'name': 'Okta Inc', 'industry': 'Technology', 'market_cap': 15000},
-            'VRSN': {'name': 'VeriSign Inc', 'industry': 'Technology', 'market_cap': 25000},
-            'AKAM': {'name': 'Akamai Technologies Inc', 'industry': 'Technology', 'market_cap': 15000},
-            'FFIV': {'name': 'F5 Inc', 'industry': 'Technology', 'market_cap': 12000},
-            'NTNX': {'name': 'Nutanix Inc', 'industry': 'Technology', 'market_cap': 15000},
-            'GTLB': {'name': 'GitLab Inc', 'industry': 'Technology', 'market_cap': 10000},
-            'ASAN': {'name': 'Asana Inc', 'industry': 'Technology', 'market_cap': 5000},
-            'FROG': {'name': 'JFrog Ltd', 'industry': 'Technology', 'market_cap': 3000},
-            'PD': {'name': 'PagerDuty Inc', 'industry': 'Technology', 'market_cap': 2000},
-            'ALRM': {'name': 'Alarm.com Holdings Inc', 'industry': 'Technology', 'market_cap': 3000},
-            'QLYS': {'name': 'Qualys Inc', 'industry': 'Technology', 'market_cap': 5000},
-            'QLYS': {'name': 'Qualys Inc', 'industry': 'Technology', 'market_cap': 5000},
-            'ALRM': {'name': 'Alarm.com Holdings Inc', 'industry': 'Technology', 'market_cap': 3000},
-            'RIVN': {'name': 'Rivian Automotive Inc', 'industry': 'Technology', 'market_cap': 25600},
-            'APP': {'name': 'AppLovin Corp', 'industry': 'Technology', 'market_cap': 23500},
-            'KRMN': {'name': 'Karman Holdings', 'industry': 'Technology', 'market_cap': 10270},
-            'PD': {'name': 'PagerDuty Inc', 'industry': 'Technology', 'market_cap': 2000},
-            'FROG': {'name': 'JFrog Ltd', 'industry': 'Technology', 'market_cap': 3000},
-            'ASAN': {'name': 'Asana Inc', 'industry': 'Technology', 'market_cap': 5000},
-            'GTLB': {'name': 'GitLab Inc', 'industry': 'Technology', 'market_cap': 10000},
-            'NTNX': {'name': 'Nutanix Inc', 'industry': 'Technology', 'market_cap': 15000},
-            'FFIV': {'name': 'F5 Inc', 'industry': 'Technology', 'market_cap': 12000},
-            'AKAM': {'name': 'Akamai Technologies Inc', 'industry': 'Technology', 'market_cap': 15000},
-            'VRSN': {'name': 'VeriSign Inc', 'industry': 'Technology', 'market_cap': 25000},
-            'OKTA': {'name': 'Okta Inc', 'industry': 'Technology', 'market_cap': 15000},
-            'MDB': {'name': 'MongoDB Inc', 'industry': 'Technology', 'market_cap': 30000},
-            'ESTC': {'name': 'Elastic N.V.', 'industry': 'Technology', 'market_cap': 10000},
-            'DOCN': {'name': 'DigitalOcean Holdings Inc', 'industry': 'Technology', 'market_cap': 3000},
-            'ZM': {'name': 'Zoom Video Communications Inc', 'industry': 'Technology', 'market_cap': 25000},
-            'TEAM': {'name': 'Atlassian Corporation', 'industry': 'Technology', 'market_cap': 60000},
-            'DDOG': {'name': 'Datadog Inc', 'industry': 'Technology', 'market_cap': 40000},
-            'NET': {'name': 'Cloudflare Inc', 'industry': 'Technology', 'market_cap': 30000},
-            'ZS': {'name': 'Zscaler Inc', 'industry': 'Technology', 'market_cap': 30000},
-            'CRWD': {'name': 'CrowdStrike Holdings Inc', 'industry': 'Technology', 'market_cap': 80000},
-            'PANW': {'name': 'Palo Alto Networks Inc', 'industry': 'Technology', 'market_cap': 100000},
-            'FTNT': {'name': 'Fortinet Inc', 'industry': 'Technology', 'market_cap': 50000},
-            'CDNS': {'name': 'Cadence Design Systems Inc', 'industry': 'Technology', 'market_cap': 80000},
-            'SNPS': {'name': 'Synopsys Inc', 'industry': 'Technology', 'market_cap': 85000},
-            'KLAC': {'name': 'KLA Corporation', 'industry': 'Technology', 'market_cap': 100000},
-            'LRCX': {'name': 'Lam Research Corporation', 'industry': 'Technology', 'market_cap': 120000},
-            'AMAT': {'name': 'Applied Materials Inc', 'industry': 'Technology', 'market_cap': 150000},
-            'TXN': {'name': 'Texas Instruments Incorporated', 'industry': 'Technology', 'market_cap': 170000},
-            'MU': {'name': 'Micron Technology Inc', 'industry': 'Technology', 'market_cap': 150000},
-            'INTU': {'name': 'Intuit Inc', 'industry': 'Technology', 'market_cap': 180000},
-            'ADBE': {'name': 'Adobe Inc', 'industry': 'Technology', 'market_cap': 250000},
-            'NOW': {'name': 'ServiceNow Inc', 'industry': 'Technology', 'market_cap': 150000},
-            'CSCO': {'name': 'Cisco Systems Inc', 'industry': 'Technology', 'market_cap': 200000},
-            'QCOM': {'name': 'QUALCOMM Incorporated', 'industry': 'Technology', 'market_cap': 200000},
-            'AMD': {'name': 'Advanced Micro Devices', 'industry': 'Technology', 'market_cap': 250000},
-            'INTC': {'name': 'Intel Corporation', 'industry': 'Technology', 'market_cap': 200000},
-            'CRM': {'name': 'Salesforce Inc', 'industry': 'Technology', 'market_cap': 250000},
-            'ORCL': {'name': 'Oracle Corporation', 'industry': 'Technology', 'market_cap': 400000},
-            'AVGO': {'name': 'Broadcom Inc', 'industry': 'Technology', 'market_cap': 600000},
-            'TSLA': {'name': 'Tesla Inc', 'industry': 'Technology', 'market_cap': 800000},
-            'NVDA': {'name': 'NVIDIA Corporation', 'industry': 'Technology', 'market_cap': 2000000},
-            'META': {'name': 'Meta Platforms Inc', 'industry': 'Technology', 'market_cap': 1200000},
-            'AMZN': {'name': 'Amazon.com Inc', 'industry': 'Technology', 'market_cap': 1500000},
-            'GOOGL': {'name': 'Alphabet Inc', 'industry': 'Technology', 'market_cap': 2000000},
-            'MSFT': {'name': 'Microsoft Corporation', 'industry': 'Technology', 'market_cap': 3000000},
-            'AAPL': {'name': 'Apple Inc', 'industry': 'Technology', 'market_cap': 3000000},
+        import json
+        import os
+        from pathlib import Path
+        
+        json_path = Path(__file__).parent / 'stocks.json'
+        cache_key = '_stocks_json_cache'
+        cache_mtime_key = '_stocks_json_mtime'
+        
+        # Check if JSON file exists
+        if not json_path.exists():
+            raise FileNotFoundError(f"stocks.json not found at {json_path}. Please create the file with stock data.")
+        
+        # Get current file modification time
+        current_mtime = os.path.getmtime(json_path)
+        cached_mtime = getattr(self, cache_mtime_key, None)
+        
+        # Reload if file changed or not cached
+        if cached_mtime != current_mtime or not hasattr(self, cache_key):
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    companies = json.load(f)
+                
+                # Validate structure
+                if not isinstance(companies, dict):
+                    raise ValueError(f"stocks.json must contain a JSON object (dict), got {type(companies)}")
+                
+                if len(companies) == 0:
+                    raise ValueError("stocks.json is empty")
+                
+                # Validate each entry has required fields
+                for ticker, data in companies.items():
+                    if not isinstance(data, dict):
+                        raise ValueError(f"Entry for {ticker} must be an object, got {type(data)}")
+                    if 'name' not in data or 'industry' not in data or 'market_cap' not in data:
+                        raise ValueError(f"Entry for {ticker} missing required fields (name, industry, market_cap)")
+                
+                # Cache the loaded data
+                setattr(self, cache_key, companies)
+                setattr(self, cache_mtime_key, current_mtime)
+                return companies
+                
+            except json.JSONDecodeError as e:
+                raise ValueError(f"stocks.json contains invalid JSON: {e}")
+            except IOError as e:
+                raise IOError(f"Error reading stocks.json: {e}")
+        
+        # Return cached data
+        return getattr(self, cache_key)
+    
+    # BACKUP REFERENCE ONLY - NOT USED IN CODE
+    # If stocks.json is ever damaged, you can ask to restore from this commented list:
+    # 
+    # companies_backup = {
+    #     # Technology
+    #     'AAPL': {'name': 'Apple Inc', 'industry': 'Technology', 'market_cap': 3000000},
+            # 'MSFT': {'name': 'Microsoft Corporation', 'industry': 'Technology', 'market_cap': 3000000},
+            # 'GOOGL': {'name': 'Alphabet Inc', 'industry': 'Technology', 'market_cap': 2000000},
+            # 'AMZN': {'name': 'Amazon.com Inc', 'industry': 'Technology', 'market_cap': 1500000},
+            # 'META': {'name': 'Meta Platforms Inc', 'industry': 'Technology', 'market_cap': 1200000},
+            # 'NVDA': {'name': 'NVIDIA Corporation', 'industry': 'Technology', 'market_cap': 2000000},
+            # 'TSLA': {'name': 'Tesla Inc', 'industry': 'Technology', 'market_cap': 800000},
+            # 'AVGO': {'name': 'Broadcom Inc', 'industry': 'Technology', 'market_cap': 600000},
+            # 'ORCL': {'name': 'Oracle Corporation', 'industry': 'Technology', 'market_cap': 400000},
+            # 'CRM': {'name': 'Salesforce Inc', 'industry': 'Technology', 'market_cap': 250000},
+            # 'INTC': {'name': 'Intel Corporation', 'industry': 'Technology', 'market_cap': 200000},
+            # 'AMD': {'name': 'Advanced Micro Devices', 'industry': 'Technology', 'market_cap': 250000},
+            # 'QCOM': {'name': 'QUALCOMM Incorporated', 'industry': 'Technology', 'market_cap': 200000},
+            # 'CSCO': {'name': 'Cisco Systems Inc', 'industry': 'Technology', 'market_cap': 200000},
+            # 'NOW': {'name': 'ServiceNow Inc', 'industry': 'Technology', 'market_cap': 150000},
+            # 'ADBE': {'name': 'Adobe Inc', 'industry': 'Technology', 'market_cap': 250000},
+            # 'INTU': {'name': 'Intuit Inc', 'industry': 'Technology', 'market_cap': 180000},
+            # 'MU': {'name': 'Micron Technology Inc', 'industry': 'Technology', 'market_cap': 150000},
+            # 'TXN': {'name': 'Texas Instruments Incorporated', 'industry': 'Technology', 'market_cap': 170000},
+            # 'AMAT': {'name': 'Applied Materials Inc', 'industry': 'Technology', 'market_cap': 150000},
+            # 'LRCX': {'name': 'Lam Research Corporation', 'industry': 'Technology', 'market_cap': 120000},
+            # 'KLAC': {'name': 'KLA Corporation', 'industry': 'Technology', 'market_cap': 100000},
+            # 'SNPS': {'name': 'Synopsys Inc', 'industry': 'Technology', 'market_cap': 85000},
+            # 'CDNS': {'name': 'Cadence Design Systems Inc', 'industry': 'Technology', 'market_cap': 80000},
+            # 'FTNT': {'name': 'Fortinet Inc', 'industry': 'Technology', 'market_cap': 50000},
+            # 'PANW': {'name': 'Palo Alto Networks Inc', 'industry': 'Technology', 'market_cap': 100000},
+            # 'CRWD': {'name': 'CrowdStrike Holdings Inc', 'industry': 'Technology', 'market_cap': 80000},
+            # 'ZS': {'name': 'Zscaler Inc', 'industry': 'Technology', 'market_cap': 30000},
+            # 'NET': {'name': 'Cloudflare Inc', 'industry': 'Technology', 'market_cap': 30000},
+            # 'DDOG': {'name': 'Datadog Inc', 'industry': 'Technology', 'market_cap': 40000},
+            # 'TEAM': {'name': 'Atlassian Corporation', 'industry': 'Technology', 'market_cap': 60000},
+            # 'ZM': {'name': 'Zoom Video Communications Inc', 'industry': 'Technology', 'market_cap': 25000},
+            # 'DOCN': {'name': 'DigitalOcean Holdings Inc', 'industry': 'Technology', 'market_cap': 3000},
+            # 'ESTC': {'name': 'Elastic N.V.', 'industry': 'Technology', 'market_cap': 10000},
+            # 'MDB': {'name': 'MongoDB Inc', 'industry': 'Technology', 'market_cap': 30000},
+            # 'OKTA': {'name': 'Okta Inc', 'industry': 'Technology', 'market_cap': 15000},
+            # 'VRSN': {'name': 'VeriSign Inc', 'industry': 'Technology', 'market_cap': 25000},
+            # 'AKAM': {'name': 'Akamai Technologies Inc', 'industry': 'Technology', 'market_cap': 15000},
+            # 'FFIV': {'name': 'F5 Inc', 'industry': 'Technology', 'market_cap': 12000},
+            # 'NTNX': {'name': 'Nutanix Inc', 'industry': 'Technology', 'market_cap': 15000},
+            # 'GTLB': {'name': 'GitLab Inc', 'industry': 'Technology', 'market_cap': 10000},
+            # 'ASAN': {'name': 'Asana Inc', 'industry': 'Technology', 'market_cap': 5000},
+            # 'FROG': {'name': 'JFrog Ltd', 'industry': 'Technology', 'market_cap': 3000},
+            # 'PD': {'name': 'PagerDuty Inc', 'industry': 'Technology', 'market_cap': 2000},
+            # 'ALRM': {'name': 'Alarm.com Holdings Inc', 'industry': 'Technology', 'market_cap': 3000},
+            # 'QLYS': {'name': 'Qualys Inc', 'industry': 'Technology', 'market_cap': 5000},
+            # 'QLYS': {'name': 'Qualys Inc', 'industry': 'Technology', 'market_cap': 5000},
+            # 'ALRM': {'name': 'Alarm.com Holdings Inc', 'industry': 'Technology', 'market_cap': 3000},
+            # 'RIVN': {'name': 'Rivian Automotive Inc', 'industry': 'Technology', 'market_cap': 25600},
+            # 'APP': {'name': 'AppLovin Corp', 'industry': 'Technology', 'market_cap': 23500},
+            # 'KRMN': {'name': 'Karman Holdings', 'industry': 'Technology', 'market_cap': 10270},
+            # 'PD': {'name': 'PagerDuty Inc', 'industry': 'Technology', 'market_cap': 2000},
+            # 'FROG': {'name': 'JFrog Ltd', 'industry': 'Technology', 'market_cap': 3000},
+            # 'ASAN': {'name': 'Asana Inc', 'industry': 'Technology', 'market_cap': 5000},
+            # 'GTLB': {'name': 'GitLab Inc', 'industry': 'Technology', 'market_cap': 10000},
+            # 'NTNX': {'name': 'Nutanix Inc', 'industry': 'Technology', 'market_cap': 15000},
+            # 'FFIV': {'name': 'F5 Inc', 'industry': 'Technology', 'market_cap': 12000},
+            # 'AKAM': {'name': 'Akamai Technologies Inc', 'industry': 'Technology', 'market_cap': 15000},
+            # 'VRSN': {'name': 'VeriSign Inc', 'industry': 'Technology', 'market_cap': 25000},
+            # 'OKTA': {'name': 'Okta Inc', 'industry': 'Technology', 'market_cap': 15000},
+            # 'MDB': {'name': 'MongoDB Inc', 'industry': 'Technology', 'market_cap': 30000},
+            # 'ESTC': {'name': 'Elastic N.V.', 'industry': 'Technology', 'market_cap': 10000},
+            # 'DOCN': {'name': 'DigitalOcean Holdings Inc', 'industry': 'Technology', 'market_cap': 3000},
+            # 'ZM': {'name': 'Zoom Video Communications Inc', 'industry': 'Technology', 'market_cap': 25000},
+            # 'TEAM': {'name': 'Atlassian Corporation', 'industry': 'Technology', 'market_cap': 60000},
+            # 'DDOG': {'name': 'Datadog Inc', 'industry': 'Technology', 'market_cap': 40000},
+            # 'NET': {'name': 'Cloudflare Inc', 'industry': 'Technology', 'market_cap': 30000},
+            # 'ZS': {'name': 'Zscaler Inc', 'industry': 'Technology', 'market_cap': 30000},
+            # 'CRWD': {'name': 'CrowdStrike Holdings Inc', 'industry': 'Technology', 'market_cap': 80000},
+            # 'PANW': {'name': 'Palo Alto Networks Inc', 'industry': 'Technology', 'market_cap': 100000},
+            # 'FTNT': {'name': 'Fortinet Inc', 'industry': 'Technology', 'market_cap': 50000},
+            # 'CDNS': {'name': 'Cadence Design Systems Inc', 'industry': 'Technology', 'market_cap': 80000},
+            # 'SNPS': {'name': 'Synopsys Inc', 'industry': 'Technology', 'market_cap': 85000},
+            # 'KLAC': {'name': 'KLA Corporation', 'industry': 'Technology', 'market_cap': 100000},
+            # 'LRCX': {'name': 'Lam Research Corporation', 'industry': 'Technology', 'market_cap': 120000},
+            # 'AMAT': {'name': 'Applied Materials Inc', 'industry': 'Technology', 'market_cap': 150000},
+            # 'TXN': {'name': 'Texas Instruments Incorporated', 'industry': 'Technology', 'market_cap': 170000},
+            # 'MU': {'name': 'Micron Technology Inc', 'industry': 'Technology', 'market_cap': 150000},
+            # 'INTU': {'name': 'Intuit Inc', 'industry': 'Technology', 'market_cap': 180000},
+            # 'ADBE': {'name': 'Adobe Inc', 'industry': 'Technology', 'market_cap': 250000},
+            # 'NOW': {'name': 'ServiceNow Inc', 'industry': 'Technology', 'market_cap': 150000},
+            # 'CSCO': {'name': 'Cisco Systems Inc', 'industry': 'Technology', 'market_cap': 200000},
+            # 'QCOM': {'name': 'QUALCOMM Incorporated', 'industry': 'Technology', 'market_cap': 200000},
+            # 'AMD': {'name': 'Advanced Micro Devices', 'industry': 'Technology', 'market_cap': 250000},
+            # 'INTC': {'name': 'Intel Corporation', 'industry': 'Technology', 'market_cap': 200000},
+            # 'CRM': {'name': 'Salesforce Inc', 'industry': 'Technology', 'market_cap': 250000},
+            # 'ORCL': {'name': 'Oracle Corporation', 'industry': 'Technology', 'market_cap': 400000},
+            # 'AVGO': {'name': 'Broadcom Inc', 'industry': 'Technology', 'market_cap': 600000},
+            # 'TSLA': {'name': 'Tesla Inc', 'industry': 'Technology', 'market_cap': 800000},
+            # 'NVDA': {'name': 'NVIDIA Corporation', 'industry': 'Technology', 'market_cap': 2000000},
+            # 'META': {'name': 'Meta Platforms Inc', 'industry': 'Technology', 'market_cap': 1200000},
+            # 'AMZN': {'name': 'Amazon.com Inc', 'industry': 'Technology', 'market_cap': 1500000},
+            # 'GOOGL': {'name': 'Alphabet Inc', 'industry': 'Technology', 'market_cap': 2000000},
+            # 'MSFT': {'name': 'Microsoft Corporation', 'industry': 'Technology', 'market_cap': 3000000},
+            # 'AAPL': {'name': 'Apple Inc', 'industry': 'Technology', 'market_cap': 3000000},
             # Healthcare
-            'JNJ': {'name': 'Johnson & Johnson', 'industry': 'Healthcare', 'market_cap': 400000},
-            'UNH': {'name': 'UnitedHealth Group Inc', 'industry': 'Healthcare', 'market_cap': 500000},
-            'PFE': {'name': 'Pfizer Inc', 'industry': 'Healthcare', 'market_cap': 200000},
-            'ABBV': {'name': 'AbbVie Inc', 'industry': 'Healthcare', 'market_cap': 300000},
-            'TMO': {'name': 'Thermo Fisher Scientific Inc', 'industry': 'Healthcare', 'market_cap': 200000},
-            'ABT': {'name': 'Abbott Laboratories', 'industry': 'Healthcare', 'market_cap': 200000},
-            'DHR': {'name': 'Danaher Corporation', 'industry': 'Healthcare', 'market_cap': 200000},
-            'BMY': {'name': 'Bristol-Myers Squibb Company', 'industry': 'Healthcare', 'market_cap': 150000},
-            'AMGN': {'name': 'Amgen Inc', 'industry': 'Healthcare', 'market_cap': 150000},
-            'GILD': {'name': 'Gilead Sciences Inc', 'industry': 'Healthcare', 'market_cap': 100000},
-            'CVS': {'name': 'CVS Health Corporation', 'industry': 'Healthcare', 'market_cap': 100000},
-            'CI': {'name': 'Cigna Corporation', 'industry': 'Healthcare', 'market_cap': 80000},
-            'HUM': {'name': 'Humana Inc', 'industry': 'Healthcare', 'market_cap': 60000},
-            'ELV': {'name': 'Elevance Health Inc', 'industry': 'Healthcare', 'market_cap': 120000},
-            'CNC': {'name': 'Centene Corporation', 'industry': 'Healthcare', 'market_cap': 40000},
-            'MRNA': {'name': 'Moderna Inc', 'industry': 'Healthcare', 'market_cap': 50000},
-            'REGN': {'name': 'Regeneron Pharmaceuticals Inc', 'industry': 'Healthcare', 'market_cap': 100000},
-            'VRTX': {'name': 'Vertex Pharmaceuticals Incorporated', 'industry': 'Healthcare', 'market_cap': 120000},
-            'BIIB': {'name': 'Biogen Inc', 'industry': 'Healthcare', 'market_cap': 40000},
-            'ILMN': {'name': 'Illumina Inc', 'industry': 'Healthcare', 'market_cap': 25000},
-            'ALNY': {'name': 'Alnylam Pharmaceuticals Inc', 'industry': 'Healthcare', 'market_cap': 25000},
-            'EXAS': {'name': 'Exact Sciences Corporation', 'industry': 'Healthcare', 'market_cap': 15000},
-            'TECH': {'name': 'Bio-Techne Corporation', 'industry': 'Healthcare', 'market_cap': 12000},
-            'ICLR': {'name': 'ICON plc', 'industry': 'Healthcare', 'market_cap': 25000},
-            'CRL': {'name': 'Charles River Laboratories International Inc', 'industry': 'Healthcare', 'market_cap': 12000},
-            'WAT': {'name': 'Waters Corporation', 'industry': 'Healthcare', 'market_cap': 15000},
-            'A': {'name': 'Agilent Technologies Inc', 'industry': 'Healthcare', 'market_cap': 40000},
-            'BRKR': {'name': 'Bruker Corporation', 'industry': 'Healthcare', 'market_cap': 12000},
-            'QGEN': {'name': 'Qiagen N.V.', 'industry': 'Healthcare', 'market_cap': 10000},
-            'PACB': {'name': 'Pacific Biosciences of California Inc', 'industry': 'Healthcare', 'market_cap': 2000},
-            'OMCL': {'name': 'Omnicell Inc', 'industry': 'Healthcare', 'market_cap': 2000},
-            'OMCL': {'name': 'Omnicell Inc', 'industry': 'Healthcare', 'market_cap': 2000},
-            'PACB': {'name': 'Pacific Biosciences of California Inc', 'industry': 'Healthcare', 'market_cap': 2000},
-            'QGEN': {'name': 'Qiagen N.V.', 'industry': 'Healthcare', 'market_cap': 10000},
-            'BRKR': {'name': 'Bruker Corporation', 'industry': 'Healthcare', 'market_cap': 12000},
-            'A': {'name': 'Agilent Technologies Inc', 'industry': 'Healthcare', 'market_cap': 40000},
-            'WAT': {'name': 'Waters Corporation', 'industry': 'Healthcare', 'market_cap': 15000},
-            'CRL': {'name': 'Charles River Laboratories International Inc', 'industry': 'Healthcare', 'market_cap': 12000},
-            'ICLR': {'name': 'ICON plc', 'industry': 'Healthcare', 'market_cap': 25000},
-            'TECH': {'name': 'Bio-Techne Corporation', 'industry': 'Healthcare', 'market_cap': 12000},
-            'EXAS': {'name': 'Exact Sciences Corporation', 'industry': 'Healthcare', 'market_cap': 15000},
-            'ALNY': {'name': 'Alnylam Pharmaceuticals Inc', 'industry': 'Healthcare', 'market_cap': 25000},
-            'ILMN': {'name': 'Illumina Inc', 'industry': 'Healthcare', 'market_cap': 25000},
-            'BIIB': {'name': 'Biogen Inc', 'industry': 'Healthcare', 'market_cap': 40000},
-            'VRTX': {'name': 'Vertex Pharmaceuticals Incorporated', 'industry': 'Healthcare', 'market_cap': 120000},
-            'REGN': {'name': 'Regeneron Pharmaceuticals Inc', 'industry': 'Healthcare', 'market_cap': 100000},
-            'MRNA': {'name': 'Moderna Inc', 'industry': 'Healthcare', 'market_cap': 50000},
-            'CNC': {'name': 'Centene Corporation', 'industry': 'Healthcare', 'market_cap': 40000},
-            'ELV': {'name': 'Elevance Health Inc', 'industry': 'Healthcare', 'market_cap': 120000},
-            'HUM': {'name': 'Humana Inc', 'industry': 'Healthcare', 'market_cap': 60000},
-            'CI': {'name': 'Cigna Corporation', 'industry': 'Healthcare', 'market_cap': 80000},
-            'CVS': {'name': 'CVS Health Corporation', 'industry': 'Healthcare', 'market_cap': 100000},
-            'GILD': {'name': 'Gilead Sciences Inc', 'industry': 'Healthcare', 'market_cap': 100000},
-            'AMGN': {'name': 'Amgen Inc', 'industry': 'Healthcare', 'market_cap': 150000},
-            'BMY': {'name': 'Bristol-Myers Squibb Company', 'industry': 'Healthcare', 'market_cap': 150000},
-            'DHR': {'name': 'Danaher Corporation', 'industry': 'Healthcare', 'market_cap': 200000},
-            'ABT': {'name': 'Abbott Laboratories', 'industry': 'Healthcare', 'market_cap': 200000},
-            'TMO': {'name': 'Thermo Fisher Scientific Inc', 'industry': 'Healthcare', 'market_cap': 200000},
-            'ABBV': {'name': 'AbbVie Inc', 'industry': 'Healthcare', 'market_cap': 300000},
-            'PFE': {'name': 'Pfizer Inc', 'industry': 'Healthcare', 'market_cap': 200000},
-            'UNH': {'name': 'UnitedHealth Group Inc', 'industry': 'Healthcare', 'market_cap': 500000},
-            'JNJ': {'name': 'Johnson & Johnson', 'industry': 'Healthcare', 'market_cap': 400000},
-            'MRK': {'name': 'Merck & Co. Inc', 'industry': 'Healthcare', 'market_cap': 200000},
-            'NVO': {'name': 'Novo Nordisk A/S', 'industry': 'Healthcare', 'market_cap': 361000},
-            'AZN': {'name': 'AstraZeneca PLC', 'industry': 'Healthcare', 'market_cap': 222000},
-            'ISRG': {'name': 'Intuitive Surgical Inc', 'industry': 'Healthcare', 'market_cap': 100000},
-            'ZBH': {'name': 'Zimmer Biomet Holdings Inc', 'industry': 'Healthcare', 'market_cap': 28000},
-            'BSX': {'name': 'Boston Scientific Corp', 'industry': 'Healthcare', 'market_cap': 75000},
-            'EW': {'name': 'Edwards Lifesciences Corp', 'industry': 'Healthcare', 'market_cap': 28000},
-            'DXCM': {'name': 'DexCom Inc', 'industry': 'Healthcare', 'market_cap': 55000},
-            'GMAB': {'name': 'Genmab A/S', 'industry': 'Healthcare', 'market_cap': 31500},
-            'HCM': {'name': 'HUTCHMED Limited', 'industry': 'Healthcare', 'market_cap': 13200},
-            'BMRN': {'name': 'BioMarin Pharmaceutical Inc', 'industry': 'Healthcare', 'market_cap': 16500},
-            'NBIX': {'name': 'Neurocrine Biosciences Inc', 'industry': 'Healthcare', 'market_cap': 13500},
+            # 'JNJ': {'name': 'Johnson & Johnson', 'industry': 'Healthcare', 'market_cap': 400000},
+            # 'UNH': {'name': 'UnitedHealth Group Inc', 'industry': 'Healthcare', 'market_cap': 500000},
+            # 'PFE': {'name': 'Pfizer Inc', 'industry': 'Healthcare', 'market_cap': 200000},
+            # 'ABBV': {'name': 'AbbVie Inc', 'industry': 'Healthcare', 'market_cap': 300000},
+            # 'TMO': {'name': 'Thermo Fisher Scientific Inc', 'industry': 'Healthcare', 'market_cap': 200000},
+            # 'ABT': {'name': 'Abbott Laboratories', 'industry': 'Healthcare', 'market_cap': 200000},
+            # 'DHR': {'name': 'Danaher Corporation', 'industry': 'Healthcare', 'market_cap': 200000},
+            # 'BMY': {'name': 'Bristol-Myers Squibb Company', 'industry': 'Healthcare', 'market_cap': 150000},
+            # 'AMGN': {'name': 'Amgen Inc', 'industry': 'Healthcare', 'market_cap': 150000},
+            # 'GILD': {'name': 'Gilead Sciences Inc', 'industry': 'Healthcare', 'market_cap': 100000},
+            # 'CVS': {'name': 'CVS Health Corporation', 'industry': 'Healthcare', 'market_cap': 100000},
+            # 'CI': {'name': 'Cigna Corporation', 'industry': 'Healthcare', 'market_cap': 80000},
+            # 'HUM': {'name': 'Humana Inc', 'industry': 'Healthcare', 'market_cap': 60000},
+            # 'ELV': {'name': 'Elevance Health Inc', 'industry': 'Healthcare', 'market_cap': 120000},
+            # 'CNC': {'name': 'Centene Corporation', 'industry': 'Healthcare', 'market_cap': 40000},
+            # 'MRNA': {'name': 'Moderna Inc', 'industry': 'Healthcare', 'market_cap': 50000},
+            # 'REGN': {'name': 'Regeneron Pharmaceuticals Inc', 'industry': 'Healthcare', 'market_cap': 100000},
+            # 'VRTX': {'name': 'Vertex Pharmaceuticals Incorporated', 'industry': 'Healthcare', 'market_cap': 120000},
+            # 'BIIB': {'name': 'Biogen Inc', 'industry': 'Healthcare', 'market_cap': 40000},
+            # 'ILMN': {'name': 'Illumina Inc', 'industry': 'Healthcare', 'market_cap': 25000},
+            # 'ALNY': {'name': 'Alnylam Pharmaceuticals Inc', 'industry': 'Healthcare', 'market_cap': 25000},
+            # 'EXAS': {'name': 'Exact Sciences Corporation', 'industry': 'Healthcare', 'market_cap': 15000},
+            # 'TECH': {'name': 'Bio-Techne Corporation', 'industry': 'Healthcare', 'market_cap': 12000},
+            # 'ICLR': {'name': 'ICON plc', 'industry': 'Healthcare', 'market_cap': 25000},
+            # 'CRL': {'name': 'Charles River Laboratories International Inc', 'industry': 'Healthcare', 'market_cap': 12000},
+            # 'WAT': {'name': 'Waters Corporation', 'industry': 'Healthcare', 'market_cap': 15000},
+            # 'A': {'name': 'Agilent Technologies Inc', 'industry': 'Healthcare', 'market_cap': 40000},
+            # 'BRKR': {'name': 'Bruker Corporation', 'industry': 'Healthcare', 'market_cap': 12000},
+            # 'QGEN': {'name': 'Qiagen N.V.', 'industry': 'Healthcare', 'market_cap': 10000},
+            # 'PACB': {'name': 'Pacific Biosciences of California Inc', 'industry': 'Healthcare', 'market_cap': 2000},
+            # 'OMCL': {'name': 'Omnicell Inc', 'industry': 'Healthcare', 'market_cap': 2000},
+            # 'OMCL': {'name': 'Omnicell Inc', 'industry': 'Healthcare', 'market_cap': 2000},
+            # 'PACB': {'name': 'Pacific Biosciences of California Inc', 'industry': 'Healthcare', 'market_cap': 2000},
+            # 'QGEN': {'name': 'Qiagen N.V.', 'industry': 'Healthcare', 'market_cap': 10000},
+            # 'BRKR': {'name': 'Bruker Corporation', 'industry': 'Healthcare', 'market_cap': 12000},
+            # 'A': {'name': 'Agilent Technologies Inc', 'industry': 'Healthcare', 'market_cap': 40000},
+            # 'WAT': {'name': 'Waters Corporation', 'industry': 'Healthcare', 'market_cap': 15000},
+            # 'CRL': {'name': 'Charles River Laboratories International Inc', 'industry': 'Healthcare', 'market_cap': 12000},
+            # 'ICLR': {'name': 'ICON plc', 'industry': 'Healthcare', 'market_cap': 25000},
+            # 'TECH': {'name': 'Bio-Techne Corporation', 'industry': 'Healthcare', 'market_cap': 12000},
+            # 'EXAS': {'name': 'Exact Sciences Corporation', 'industry': 'Healthcare', 'market_cap': 15000},
+            # 'ALNY': {'name': 'Alnylam Pharmaceuticals Inc', 'industry': 'Healthcare', 'market_cap': 25000},
+            # 'ILMN': {'name': 'Illumina Inc', 'industry': 'Healthcare', 'market_cap': 25000},
+            # 'BIIB': {'name': 'Biogen Inc', 'industry': 'Healthcare', 'market_cap': 40000},
+            # 'VRTX': {'name': 'Vertex Pharmaceuticals Incorporated', 'industry': 'Healthcare', 'market_cap': 120000},
+            # 'REGN': {'name': 'Regeneron Pharmaceuticals Inc', 'industry': 'Healthcare', 'market_cap': 100000},
+            # 'MRNA': {'name': 'Moderna Inc', 'industry': 'Healthcare', 'market_cap': 50000},
+            # 'CNC': {'name': 'Centene Corporation', 'industry': 'Healthcare', 'market_cap': 40000},
+            # 'ELV': {'name': 'Elevance Health Inc', 'industry': 'Healthcare', 'market_cap': 120000},
+            # 'HUM': {'name': 'Humana Inc', 'industry': 'Healthcare', 'market_cap': 60000},
+            # 'CI': {'name': 'Cigna Corporation', 'industry': 'Healthcare', 'market_cap': 80000},
+            # 'CVS': {'name': 'CVS Health Corporation', 'industry': 'Healthcare', 'market_cap': 100000},
+            # 'GILD': {'name': 'Gilead Sciences Inc', 'industry': 'Healthcare', 'market_cap': 100000},
+            # 'AMGN': {'name': 'Amgen Inc', 'industry': 'Healthcare', 'market_cap': 150000},
+            # 'BMY': {'name': 'Bristol-Myers Squibb Company', 'industry': 'Healthcare', 'market_cap': 150000},
+            # 'DHR': {'name': 'Danaher Corporation', 'industry': 'Healthcare', 'market_cap': 200000},
+            # 'ABT': {'name': 'Abbott Laboratories', 'industry': 'Healthcare', 'market_cap': 200000},
+            # 'TMO': {'name': 'Thermo Fisher Scientific Inc', 'industry': 'Healthcare', 'market_cap': 200000},
+            # 'ABBV': {'name': 'AbbVie Inc', 'industry': 'Healthcare', 'market_cap': 300000},
+            # 'PFE': {'name': 'Pfizer Inc', 'industry': 'Healthcare', 'market_cap': 200000},
+            # 'UNH': {'name': 'UnitedHealth Group Inc', 'industry': 'Healthcare', 'market_cap': 500000},
+            # 'JNJ': {'name': 'Johnson & Johnson', 'industry': 'Healthcare', 'market_cap': 400000},
+            # 'MRK': {'name': 'Merck & Co. Inc', 'industry': 'Healthcare', 'market_cap': 200000},
+            # 'NVO': {'name': 'Novo Nordisk A/S', 'industry': 'Healthcare', 'market_cap': 361000},
+            # 'AZN': {'name': 'AstraZeneca PLC', 'industry': 'Healthcare', 'market_cap': 222000},
+            # 'ISRG': {'name': 'Intuitive Surgical Inc', 'industry': 'Healthcare', 'market_cap': 100000},
+            # 'ZBH': {'name': 'Zimmer Biomet Holdings Inc', 'industry': 'Healthcare', 'market_cap': 28000},
+            # 'BSX': {'name': 'Boston Scientific Corp', 'industry': 'Healthcare', 'market_cap': 75000},
+            # 'EW': {'name': 'Edwards Lifesciences Corp', 'industry': 'Healthcare', 'market_cap': 28000},
+            # 'DXCM': {'name': 'DexCom Inc', 'industry': 'Healthcare', 'market_cap': 55000},
+            # 'GMAB': {'name': 'Genmab A/S', 'industry': 'Healthcare', 'market_cap': 31500},
+            # 'HCM': {'name': 'HUTCHMED Limited', 'industry': 'Healthcare', 'market_cap': 13200},
+            # 'BMRN': {'name': 'BioMarin Pharmaceutical Inc', 'industry': 'Healthcare', 'market_cap': 16500},
+            # 'NBIX': {'name': 'Neurocrine Biosciences Inc', 'industry': 'Healthcare', 'market_cap': 13500},
             # Financials
-            'JPM': {'name': 'JPMorgan Chase & Co', 'industry': 'Financials', 'market_cap': 500000},
-            'BAC': {'name': 'Bank of America Corp', 'industry': 'Financials', 'market_cap': 300000},
-            'WFC': {'name': 'Wells Fargo & Company', 'industry': 'Financials', 'market_cap': 200000},
-            'GS': {'name': 'Goldman Sachs Group Inc', 'industry': 'Financials', 'market_cap': 150000},
-            'MS': {'name': 'Morgan Stanley', 'industry': 'Financials', 'market_cap': 150000},
-            'C': {'name': 'Citigroup Inc', 'industry': 'Financials', 'market_cap': 100000},
-            'BLK': {'name': 'BlackRock Inc', 'industry': 'Financials', 'market_cap': 120000},
-            'SCHW': {'name': 'Charles Schwab Corporation', 'industry': 'Financials', 'market_cap': 150000},
-            'AXP': {'name': 'American Express Company', 'industry': 'Financials', 'market_cap': 150000},
-            'COF': {'name': 'Capital One Financial Corporation', 'industry': 'Financials', 'market_cap': 50000},
-            'USB': {'name': 'U.S. Bancorp', 'industry': 'Financials', 'market_cap': 60000},
-            'PNC': {'name': 'PNC Financial Services Group Inc', 'industry': 'Financials', 'market_cap': 70000},
-            'TFC': {'name': 'Truist Financial Corporation', 'industry': 'Financials', 'market_cap': 50000},
-            'BK': {'name': 'Bank of New York Mellon Corporation', 'industry': 'Financials', 'market_cap': 40000},
-            'STT': {'name': 'State Street Corporation', 'industry': 'Financials', 'market_cap': 25000},
-            'MTB': {'name': 'M&T Bank Corporation', 'industry': 'Financials', 'market_cap': 25000},
-            'CFG': {'name': 'Citizens Financial Group Inc', 'industry': 'Financials', 'market_cap': 20000},
-            'HBAN': {'name': 'Huntington Bancshares Incorporated', 'industry': 'Financials', 'market_cap': 20000},
-            'ZION': {'name': 'Zions Bancorporation N.A.', 'industry': 'Financials', 'market_cap': 10000},
-            'KEY': {'name': 'KeyCorp', 'industry': 'Financials', 'market_cap': 15000},
-            'RF': {'name': 'Regions Financial Corporation', 'industry': 'Financials', 'market_cap': 20000},
-            'FITB': {'name': 'Fifth Third Bancorp', 'industry': 'Financials', 'market_cap': 25000},
-            'CMA': {'name': 'Comerica Incorporated', 'industry': 'Financials', 'market_cap': 8000},
-            'WTFC': {'name': 'Wintrust Financial Corporation', 'industry': 'Financials', 'market_cap': 6000},
-            'ONB': {'name': 'Old National Bancorp', 'industry': 'Financials', 'market_cap': 6000},
-            'HOMB': {'name': 'Home BancShares Inc', 'industry': 'Financials', 'market_cap': 6000},
-            'HOMB': {'name': 'Home BancShares Inc', 'industry': 'Financials', 'market_cap': 6000},
-            'ONB': {'name': 'Old National Bancorp', 'industry': 'Financials', 'market_cap': 6000},
-            'WTFC': {'name': 'Wintrust Financial Corporation', 'industry': 'Financials', 'market_cap': 6000},
-            'CMA': {'name': 'Comerica Incorporated', 'industry': 'Financials', 'market_cap': 8000},
-            'FITB': {'name': 'Fifth Third Bancorp', 'industry': 'Financials', 'market_cap': 25000},
-            'RF': {'name': 'Regions Financial Corporation', 'industry': 'Financials', 'market_cap': 20000},
-            'KEY': {'name': 'KeyCorp', 'industry': 'Financials', 'market_cap': 15000},
-            'ZION': {'name': 'Zions Bancorporation N.A.', 'industry': 'Financials', 'market_cap': 10000},
-            'HBAN': {'name': 'Huntington Bancshares Incorporated', 'industry': 'Financials', 'market_cap': 20000},
-            'CFG': {'name': 'Citizens Financial Group Inc', 'industry': 'Financials', 'market_cap': 20000},
-            'MTB': {'name': 'M&T Bank Corporation', 'industry': 'Financials', 'market_cap': 25000},
-            'STT': {'name': 'State Street Corporation', 'industry': 'Financials', 'market_cap': 25000},
-            'BK': {'name': 'Bank of New York Mellon Corporation', 'industry': 'Financials', 'market_cap': 40000},
-            'TFC': {'name': 'Truist Financial Corporation', 'industry': 'Financials', 'market_cap': 50000},
-            'PNC': {'name': 'PNC Financial Services Group Inc', 'industry': 'Financials', 'market_cap': 70000},
-            'USB': {'name': 'U.S. Bancorp', 'industry': 'Financials', 'market_cap': 60000},
-            'COF': {'name': 'Capital One Financial Corporation', 'industry': 'Financials', 'market_cap': 50000},
-            'AXP': {'name': 'American Express Company', 'industry': 'Financials', 'market_cap': 150000},
-            'SCHW': {'name': 'Charles Schwab Corporation', 'industry': 'Financials', 'market_cap': 150000},
-            'BLK': {'name': 'BlackRock Inc', 'industry': 'Financials', 'market_cap': 120000},
-            'C': {'name': 'Citigroup Inc', 'industry': 'Financials', 'market_cap': 100000},
-            'MS': {'name': 'Morgan Stanley', 'industry': 'Financials', 'market_cap': 150000},
-            'GS': {'name': 'Goldman Sachs Group Inc', 'industry': 'Financials', 'market_cap': 150000},
-            'WFC': {'name': 'Wells Fargo & Company', 'industry': 'Financials', 'market_cap': 200000},
-            'BAC': {'name': 'Bank of America Corp', 'industry': 'Financials', 'market_cap': 300000},
-            'JPM': {'name': 'JPMorgan Chase & Co', 'industry': 'Financials', 'market_cap': 500000},
+            # 'JPM': {'name': 'JPMorgan Chase & Co', 'industry': 'Financials', 'market_cap': 500000},
+            # 'AIG': {'name': 'American International Group Inc', 'industry': 'Financials', 'market_cap': 46000},
+            # 'BAC': {'name': 'Bank of America Corp', 'industry': 'Financials', 'market_cap': 300000},
+            # 'WFC': {'name': 'Wells Fargo & Company', 'industry': 'Financials', 'market_cap': 200000},
+            # 'GS': {'name': 'Goldman Sachs Group Inc', 'industry': 'Financials', 'market_cap': 150000},
+            # 'MS': {'name': 'Morgan Stanley', 'industry': 'Financials', 'market_cap': 150000},
+            # 'C': {'name': 'Citigroup Inc', 'industry': 'Financials', 'market_cap': 100000},
+            # 'BLK': {'name': 'BlackRock Inc', 'industry': 'Financials', 'market_cap': 120000},
+            # 'SCHW': {'name': 'Charles Schwab Corporation', 'industry': 'Financials', 'market_cap': 150000},
+            # 'AXP': {'name': 'American Express Company', 'industry': 'Financials', 'market_cap': 150000},
+            # 'COF': {'name': 'Capital One Financial Corporation', 'industry': 'Financials', 'market_cap': 50000},
+            # 'USB': {'name': 'U.S. Bancorp', 'industry': 'Financials', 'market_cap': 60000},
+            # 'PNC': {'name': 'PNC Financial Services Group Inc', 'industry': 'Financials', 'market_cap': 70000},
+            # 'TFC': {'name': 'Truist Financial Corporation', 'industry': 'Financials', 'market_cap': 50000},
+            # 'BK': {'name': 'Bank of New York Mellon Corporation', 'industry': 'Financials', 'market_cap': 40000},
+            # 'STT': {'name': 'State Street Corporation', 'industry': 'Financials', 'market_cap': 25000},
+            # 'MTB': {'name': 'M&T Bank Corporation', 'industry': 'Financials', 'market_cap': 25000},
+            # 'CFG': {'name': 'Citizens Financial Group Inc', 'industry': 'Financials', 'market_cap': 20000},
+            # 'HBAN': {'name': 'Huntington Bancshares Incorporated', 'industry': 'Financials', 'market_cap': 20000},
+            # 'ZION': {'name': 'Zions Bancorporation N.A.', 'industry': 'Financials', 'market_cap': 10000},
+            # 'KEY': {'name': 'KeyCorp', 'industry': 'Financials', 'market_cap': 15000},
+            # 'RF': {'name': 'Regions Financial Corporation', 'industry': 'Financials', 'market_cap': 20000},
+            # 'FITB': {'name': 'Fifth Third Bancorp', 'industry': 'Financials', 'market_cap': 25000},
+            # 'CMA': {'name': 'Comerica Incorporated', 'industry': 'Financials', 'market_cap': 8000},
+            # 'WTFC': {'name': 'Wintrust Financial Corporation', 'industry': 'Financials', 'market_cap': 6000},
+            # 'ONB': {'name': 'Old National Bancorp', 'industry': 'Financials', 'market_cap': 6000},
+            # 'HOMB': {'name': 'Home BancShares Inc', 'industry': 'Financials', 'market_cap': 6000},
+            # 'HOMB': {'name': 'Home BancShares Inc', 'industry': 'Financials', 'market_cap': 6000},
+            # 'ONB': {'name': 'Old National Bancorp', 'industry': 'Financials', 'market_cap': 6000},
+            # 'WTFC': {'name': 'Wintrust Financial Corporation', 'industry': 'Financials', 'market_cap': 6000},
+            # 'CMA': {'name': 'Comerica Incorporated', 'industry': 'Financials', 'market_cap': 8000},
+            # 'FITB': {'name': 'Fifth Third Bancorp', 'industry': 'Financials', 'market_cap': 25000},
+            # 'RF': {'name': 'Regions Financial Corporation', 'industry': 'Financials', 'market_cap': 20000},
+            # 'KEY': {'name': 'KeyCorp', 'industry': 'Financials', 'market_cap': 15000},
+            # 'ZION': {'name': 'Zions Bancorporation N.A.', 'industry': 'Financials', 'market_cap': 10000},
+            # 'HBAN': {'name': 'Huntington Bancshares Incorporated', 'industry': 'Financials', 'market_cap': 20000},
+            # 'CFG': {'name': 'Citizens Financial Group Inc', 'industry': 'Financials', 'market_cap': 20000},
+            # 'MTB': {'name': 'M&T Bank Corporation', 'industry': 'Financials', 'market_cap': 25000},
+            # 'STT': {'name': 'State Street Corporation', 'industry': 'Financials', 'market_cap': 25000},
+            # 'BK': {'name': 'Bank of New York Mellon Corporation', 'industry': 'Financials', 'market_cap': 40000},
+            # 'TFC': {'name': 'Truist Financial Corporation', 'industry': 'Financials', 'market_cap': 50000},
+            # 'PNC': {'name': 'PNC Financial Services Group Inc', 'industry': 'Financials', 'market_cap': 70000},
+            # 'USB': {'name': 'U.S. Bancorp', 'industry': 'Financials', 'market_cap': 60000},
+            # 'COF': {'name': 'Capital One Financial Corporation', 'industry': 'Financials', 'market_cap': 50000},
+            # 'AXP': {'name': 'American Express Company', 'industry': 'Financials', 'market_cap': 150000},
+            # 'SCHW': {'name': 'Charles Schwab Corporation', 'industry': 'Financials', 'market_cap': 150000},
+            # 'BLK': {'name': 'BlackRock Inc', 'industry': 'Financials', 'market_cap': 120000},
+            # 'C': {'name': 'Citigroup Inc', 'industry': 'Financials', 'market_cap': 100000},
+            # 'MS': {'name': 'Morgan Stanley', 'industry': 'Financials', 'market_cap': 150000},
+            # 'GS': {'name': 'Goldman Sachs Group Inc', 'industry': 'Financials', 'market_cap': 150000},
+            # 'AIG': {'name': 'American International Group Inc', 'industry': 'Financials', 'market_cap': 46000},
+            # 'WFC': {'name': 'Wells Fargo & Company', 'industry': 'Financials', 'market_cap': 200000},
+            # 'BAC': {'name': 'Bank of America Corp', 'industry': 'Financials', 'market_cap': 300000},
+            # 'JPM': {'name': 'JPMorgan Chase & Co', 'industry': 'Financials', 'market_cap': 500000},
             # Energy
-            'XOM': {'name': 'Exxon Mobil Corporation', 'industry': 'Energy', 'market_cap': 400000},
-            'CVX': {'name': 'Chevron Corporation', 'industry': 'Energy', 'market_cap': 300000},
-            'SLB': {'name': 'Schlumberger Limited', 'industry': 'Energy', 'market_cap': 80000},
-            'COP': {'name': 'ConocoPhillips', 'industry': 'Energy', 'market_cap': 150000},
-            'EOG': {'name': 'EOG Resources Inc', 'industry': 'Energy', 'market_cap': 70000},
-            'MPC': {'name': 'Marathon Petroleum Corporation', 'industry': 'Energy', 'market_cap': 60000},
-            'VLO': {'name': 'Valero Energy Corporation', 'industry': 'Energy', 'market_cap': 50000},
-            'PSX': {'name': 'Phillips 66', 'industry': 'Energy', 'market_cap': 50000},
-            'HAL': {'name': 'Halliburton Company', 'industry': 'Energy', 'market_cap': 35000},
-            'BKR': {'name': 'Baker Hughes Company', 'industry': 'Energy', 'market_cap': 30000},
-            'FANG': {'name': 'Diamondback Energy Inc', 'industry': 'Energy', 'market_cap': 30000},
-            'CTRA': {'name': 'Coterra Energy Inc', 'industry': 'Energy', 'market_cap': 20000},
-            'OVV': {'name': 'Ovintiv Inc', 'industry': 'Energy', 'market_cap': 15000},
-            'DVN': {'name': 'Devon Energy Corporation', 'industry': 'Energy', 'market_cap': 30000},
-            'PR': {'name': 'Permian Resources Corporation', 'industry': 'Energy', 'market_cap': 10000},
-            'PR': {'name': 'Permian Resources Corporation', 'industry': 'Energy', 'market_cap': 10000},
-            'DVN': {'name': 'Devon Energy Corporation', 'industry': 'Energy', 'market_cap': 30000},
-            'OVV': {'name': 'Ovintiv Inc', 'industry': 'Energy', 'market_cap': 15000},
-            'CTRA': {'name': 'Coterra Energy Inc', 'industry': 'Energy', 'market_cap': 20000},
-            'FANG': {'name': 'Diamondback Energy Inc', 'industry': 'Energy', 'market_cap': 30000},
-            'BKR': {'name': 'Baker Hughes Company', 'industry': 'Energy', 'market_cap': 30000},
-            'HAL': {'name': 'Halliburton Company', 'industry': 'Energy', 'market_cap': 35000},
-            'PSX': {'name': 'Phillips 66', 'industry': 'Energy', 'market_cap': 50000},
-            'VLO': {'name': 'Valero Energy Corporation', 'industry': 'Energy', 'market_cap': 50000},
-            'MPC': {'name': 'Marathon Petroleum Corporation', 'industry': 'Energy', 'market_cap': 60000},
-            'EOG': {'name': 'EOG Resources Inc', 'industry': 'Energy', 'market_cap': 70000},
-            'COP': {'name': 'ConocoPhillips', 'industry': 'Energy', 'market_cap': 150000},
-            'SLB': {'name': 'Schlumberger Limited', 'industry': 'Energy', 'market_cap': 80000},
-            'CVX': {'name': 'Chevron Corporation', 'industry': 'Energy', 'market_cap': 300000},
-            'XOM': {'name': 'Exxon Mobil Corporation', 'industry': 'Energy', 'market_cap': 400000},
+            # 'XOM': {'name': 'Exxon Mobil Corporation', 'industry': 'Energy', 'market_cap': 400000},
+            # 'CVX': {'name': 'Chevron Corporation', 'industry': 'Energy', 'market_cap': 300000},
+            # 'SLB': {'name': 'Schlumberger Limited', 'industry': 'Energy', 'market_cap': 80000},
+            # 'COP': {'name': 'ConocoPhillips', 'industry': 'Energy', 'market_cap': 150000},
+            # 'CNQ': {'name': 'Canadian Natural Resources Limited', 'industry': 'Energy', 'market_cap': 70000},
+            # 'EOG': {'name': 'EOG Resources Inc', 'industry': 'Energy', 'market_cap': 70000},
+            # 'MPC': {'name': 'Marathon Petroleum Corporation', 'industry': 'Energy', 'market_cap': 60000},
+            # 'VLO': {'name': 'Valero Energy Corporation', 'industry': 'Energy', 'market_cap': 50000},
+            # 'PSX': {'name': 'Phillips 66', 'industry': 'Energy', 'market_cap': 50000},
+            # 'HAL': {'name': 'Halliburton Company', 'industry': 'Energy', 'market_cap': 35000},
+            # 'BKR': {'name': 'Baker Hughes Company', 'industry': 'Energy', 'market_cap': 30000},
+            # 'FANG': {'name': 'Diamondback Energy Inc', 'industry': 'Energy', 'market_cap': 30000},
+            # 'CTRA': {'name': 'Coterra Energy Inc', 'industry': 'Energy', 'market_cap': 20000},
+            # 'OVV': {'name': 'Ovintiv Inc', 'industry': 'Energy', 'market_cap': 15000},
+            # 'DVN': {'name': 'Devon Energy Corporation', 'industry': 'Energy', 'market_cap': 30000},
+            # 'PR': {'name': 'Permian Resources Corporation', 'industry': 'Energy', 'market_cap': 10000},
+            # 'PR': {'name': 'Permian Resources Corporation', 'industry': 'Energy', 'market_cap': 10000},
+            # 'DVN': {'name': 'Devon Energy Corporation', 'industry': 'Energy', 'market_cap': 30000},
+            # 'OVV': {'name': 'Ovintiv Inc', 'industry': 'Energy', 'market_cap': 15000},
+            # 'CTRA': {'name': 'Coterra Energy Inc', 'industry': 'Energy', 'market_cap': 20000},
+            # 'FANG': {'name': 'Diamondback Energy Inc', 'industry': 'Energy', 'market_cap': 30000},
+            # 'BKR': {'name': 'Baker Hughes Company', 'industry': 'Energy', 'market_cap': 30000},
+            # 'HAL': {'name': 'Halliburton Company', 'industry': 'Energy', 'market_cap': 35000},
+            # 'PSX': {'name': 'Phillips 66', 'industry': 'Energy', 'market_cap': 50000},
+            # 'VLO': {'name': 'Valero Energy Corporation', 'industry': 'Energy', 'market_cap': 50000},
+            # 'MPC': {'name': 'Marathon Petroleum Corporation', 'industry': 'Energy', 'market_cap': 60000},
+            # 'EOG': {'name': 'EOG Resources Inc', 'industry': 'Energy', 'market_cap': 70000},
+            # 'CNQ': {'name': 'Canadian Natural Resources Limited', 'industry': 'Energy', 'market_cap': 70000},
+            # 'COP': {'name': 'ConocoPhillips', 'industry': 'Energy', 'market_cap': 150000},
+            # 'SLB': {'name': 'Schlumberger Limited', 'industry': 'Energy', 'market_cap': 80000},
+            # 'CVX': {'name': 'Chevron Corporation', 'industry': 'Energy', 'market_cap': 300000},
+            # 'XOM': {'name': 'Exxon Mobil Corporation', 'industry': 'Energy', 'market_cap': 400000},
             # Consumer
-            'WMT': {'name': 'Walmart Inc', 'industry': 'Consumer', 'market_cap': 400000},
-            'HD': {'name': 'Home Depot Inc', 'industry': 'Consumer', 'market_cap': 350000},
-            'MCD': {'name': 'McDonald\'s Corporation', 'industry': 'Consumer', 'market_cap': 200000},
-            'SBUX': {'name': 'Starbucks Corporation', 'industry': 'Consumer', 'market_cap': 100000},
-            'NKE': {'name': 'Nike Inc', 'industry': 'Consumer', 'market_cap': 150000},
-            'TGT': {'name': 'Target Corporation', 'industry': 'Consumer', 'market_cap': 70000},
-            'LOW': {'name': 'Lowe\'s Companies Inc', 'industry': 'Consumer', 'market_cap': 150000},
-            'COST': {'name': 'Costco Wholesale Corporation', 'industry': 'Consumer', 'market_cap': 250000},
-            'BKNG': {'name': 'Booking Holdings Inc', 'industry': 'Consumer', 'market_cap': 100000},
-            'MAR': {'name': 'Marriott International Inc', 'industry': 'Consumer', 'market_cap': 60000},
-            'HLT': {'name': 'Hilton Worldwide Holdings Inc', 'industry': 'Consumer', 'market_cap': 50000},
-            'ABNB': {'name': 'Airbnb Inc', 'industry': 'Consumer', 'market_cap': 80000},
-            'EXPE': {'name': 'Expedia Group Inc', 'industry': 'Consumer', 'market_cap': 20000},
-            'TRIP': {'name': 'Tripadvisor Inc', 'industry': 'Consumer', 'market_cap': 3000},
-            'TRIP': {'name': 'Tripadvisor Inc', 'industry': 'Consumer', 'market_cap': 3000},
-            'EXPE': {'name': 'Expedia Group Inc', 'industry': 'Consumer', 'market_cap': 20000},
-            'ABNB': {'name': 'Airbnb Inc', 'industry': 'Consumer', 'market_cap': 80000},
-            'HLT': {'name': 'Hilton Worldwide Holdings Inc', 'industry': 'Consumer', 'market_cap': 50000},
-            'MAR': {'name': 'Marriott International Inc', 'industry': 'Consumer', 'market_cap': 60000},
-            'BKNG': {'name': 'Booking Holdings Inc', 'industry': 'Consumer', 'market_cap': 100000},
-            'COST': {'name': 'Costco Wholesale Corporation', 'industry': 'Consumer', 'market_cap': 250000},
-            'LOW': {'name': 'Lowe\'s Companies Inc', 'industry': 'Consumer', 'market_cap': 150000},
-            'TGT': {'name': 'Target Corporation', 'industry': 'Consumer', 'market_cap': 70000},
-            'NKE': {'name': 'Nike Inc', 'industry': 'Consumer', 'market_cap': 150000},
-            'SBUX': {'name': 'Starbucks Corporation', 'industry': 'Consumer', 'market_cap': 100000},
-            'MCD': {'name': 'McDonald\'s Corporation', 'industry': 'Consumer', 'market_cap': 200000},
-            'HD': {'name': 'Home Depot Inc', 'industry': 'Consumer', 'market_cap': 350000},
-            'WMT': {'name': 'Walmart Inc', 'industry': 'Consumer', 'market_cap': 400000},
-            'LVS': {'name': 'Las Vegas Sands Corp', 'industry': 'Consumer', 'market_cap': 65000},
-            'MGM': {'name': 'MGM Resorts International', 'industry': 'Consumer', 'market_cap': 37000},
-            'WYNN': {'name': 'Wynn Resorts Limited', 'industry': 'Consumer', 'market_cap': 12000},
-            'CZR': {'name': 'Caesars Entertainment Inc', 'industry': 'Consumer', 'market_cap': 10000},
-            'PENN': {'name': 'PENN Entertainment Inc', 'industry': 'Consumer', 'market_cap': 5000},
+            # 'WMT': {'name': 'Walmart Inc', 'industry': 'Consumer', 'market_cap': 400000},
+            # 'HD': {'name': 'Home Depot Inc', 'industry': 'Consumer', 'market_cap': 350000},
+            # 'MCD': {'name': 'McDonald\'s Corporation', 'industry': 'Consumer', 'market_cap': 200000},
+            # 'SBUX': {'name': 'Starbucks Corporation', 'industry': 'Consumer', 'market_cap': 100000},
+            # 'NKE': {'name': 'Nike Inc', 'industry': 'Consumer', 'market_cap': 150000},
+            # 'TGT': {'name': 'Target Corporation', 'industry': 'Consumer', 'market_cap': 70000},
+            # 'LOW': {'name': 'Lowe\'s Companies Inc', 'industry': 'Consumer', 'market_cap': 150000},
+            # 'COST': {'name': 'Costco Wholesale Corporation', 'industry': 'Consumer', 'market_cap': 250000},
+            # 'BKNG': {'name': 'Booking Holdings Inc', 'industry': 'Consumer', 'market_cap': 100000},
+            # 'MAR': {'name': 'Marriott International Inc', 'industry': 'Consumer', 'market_cap': 60000},
+            # 'HLT': {'name': 'Hilton Worldwide Holdings Inc', 'industry': 'Consumer', 'market_cap': 50000},
+            # 'ABNB': {'name': 'Airbnb Inc', 'industry': 'Consumer', 'market_cap': 80000},
+            # 'EXPE': {'name': 'Expedia Group Inc', 'industry': 'Consumer', 'market_cap': 20000},
+            # 'TRIP': {'name': 'Tripadvisor Inc', 'industry': 'Consumer', 'market_cap': 3000},
+            # 'TRIP': {'name': 'Tripadvisor Inc', 'industry': 'Consumer', 'market_cap': 3000},
+            # 'EXPE': {'name': 'Expedia Group Inc', 'industry': 'Consumer', 'market_cap': 20000},
+            # 'ABNB': {'name': 'Airbnb Inc', 'industry': 'Consumer', 'market_cap': 80000},
+            # 'HLT': {'name': 'Hilton Worldwide Holdings Inc', 'industry': 'Consumer', 'market_cap': 50000},
+            # 'MAR': {'name': 'Marriott International Inc', 'industry': 'Consumer', 'market_cap': 60000},
+            # 'BKNG': {'name': 'Booking Holdings Inc', 'industry': 'Consumer', 'market_cap': 100000},
+            # 'COST': {'name': 'Costco Wholesale Corporation', 'industry': 'Consumer', 'market_cap': 250000},
+            # 'LOW': {'name': 'Lowe\'s Companies Inc', 'industry': 'Consumer', 'market_cap': 150000},
+            # 'TGT': {'name': 'Target Corporation', 'industry': 'Consumer', 'market_cap': 70000},
+            # 'NKE': {'name': 'Nike Inc', 'industry': 'Consumer', 'market_cap': 150000},
+            # 'SBUX': {'name': 'Starbucks Corporation', 'industry': 'Consumer', 'market_cap': 100000},
+            # 'MCD': {'name': 'McDonald\'s Corporation', 'industry': 'Consumer', 'market_cap': 200000},
+            # 'HD': {'name': 'Home Depot Inc', 'industry': 'Consumer', 'market_cap': 350000},
+            # 'WMT': {'name': 'Walmart Inc', 'industry': 'Consumer', 'market_cap': 400000},
+            # 'LVS': {'name': 'Las Vegas Sands Corp', 'industry': 'Consumer', 'market_cap': 65000},
+            # 'MGM': {'name': 'MGM Resorts International', 'industry': 'Consumer', 'market_cap': 37000},
+            # 'WYNN': {'name': 'Wynn Resorts Limited', 'industry': 'Consumer', 'market_cap': 12000},
+            # 'CZR': {'name': 'Caesars Entertainment Inc', 'industry': 'Consumer', 'market_cap': 10000},
+            # 'PENN': {'name': 'PENN Entertainment Inc', 'industry': 'Consumer', 'market_cap': 5000},
             # Industrial
-            'BA': {'name': 'Boeing Company', 'industry': 'Industrial', 'market_cap': 150000},
-            'CAT': {'name': 'Caterpillar Inc', 'industry': 'Industrial', 'market_cap': 150000},
-            'GE': {'name': 'General Electric Company', 'industry': 'Industrial', 'market_cap': 150000},
-            'HON': {'name': 'Honeywell International Inc', 'industry': 'Industrial', 'market_cap': 150000},
-            'RTX': {'name': 'Raytheon Technologies Corporation', 'industry': 'Industrial', 'market_cap': 150000},
-            'LMT': {'name': 'Lockheed Martin Corporation', 'industry': 'Industrial', 'market_cap': 120000},
-            'NOC': {'name': 'Northrop Grumman Corporation', 'industry': 'Industrial', 'market_cap': 70000},
-            'GD': {'name': 'General Dynamics Corporation', 'industry': 'Industrial', 'market_cap': 80000},
-            'DE': {'name': 'Deere & Company', 'industry': 'Industrial', 'market_cap': 120000},
-            'EMR': {'name': 'Emerson Electric Co', 'industry': 'Industrial', 'market_cap': 60000},
-            'ETN': {'name': 'Eaton Corporation plc', 'industry': 'Industrial', 'market_cap': 80000},
-            'ITW': {'name': 'Illinois Tool Works Inc', 'industry': 'Industrial', 'market_cap': 80000},
-            'PH': {'name': 'Parker-Hannifin Corporation', 'industry': 'Industrial', 'market_cap': 60000},
-            'ROK': {'name': 'Rockwell Automation Inc', 'industry': 'Industrial', 'market_cap': 35000},
-            'AME': {'name': 'AMETEK Inc', 'industry': 'Industrial', 'market_cap': 35000},
-            'FTV': {'name': 'Fortive Corporation', 'industry': 'Industrial', 'market_cap': 30000},
-            'DOV': {'name': 'Dover Corporation', 'industry': 'Industrial', 'market_cap': 25000},
-            'GGG': {'name': 'Graco Inc', 'industry': 'Industrial', 'market_cap': 15000},
-            'GGG': {'name': 'Graco Inc', 'industry': 'Industrial', 'market_cap': 15000},
-            'DOV': {'name': 'Dover Corporation', 'industry': 'Industrial', 'market_cap': 25000},
-            'FTV': {'name': 'Fortive Corporation', 'industry': 'Industrial', 'market_cap': 30000},
-            'AME': {'name': 'AMETEK Inc', 'industry': 'Industrial', 'market_cap': 35000},
-            'ROK': {'name': 'Rockwell Automation Inc', 'industry': 'Industrial', 'market_cap': 35000},
-            'PH': {'name': 'Parker-Hannifin Corporation', 'industry': 'Industrial', 'market_cap': 60000},
-            'ITW': {'name': 'Illinois Tool Works Inc', 'industry': 'Industrial', 'market_cap': 80000},
-            'ETN': {'name': 'Eaton Corporation plc', 'industry': 'Industrial', 'market_cap': 80000},
-            'EMR': {'name': 'Emerson Electric Co', 'industry': 'Industrial', 'market_cap': 60000},
-            'DE': {'name': 'Deere & Company', 'industry': 'Industrial', 'market_cap': 120000},
-            'GD': {'name': 'General Dynamics Corporation', 'industry': 'Industrial', 'market_cap': 80000},
-            'NOC': {'name': 'Northrop Grumman Corporation', 'industry': 'Industrial', 'market_cap': 70000},
-            'LMT': {'name': 'Lockheed Martin Corporation', 'industry': 'Industrial', 'market_cap': 120000},
-            'RTX': {'name': 'Raytheon Technologies Corporation', 'industry': 'Industrial', 'market_cap': 150000},
-            'HON': {'name': 'Honeywell International Inc', 'industry': 'Industrial', 'market_cap': 150000},
-            'GE': {'name': 'General Electric Company', 'industry': 'Industrial', 'market_cap': 150000},
-            'CAT': {'name': 'Caterpillar Inc', 'industry': 'Industrial', 'market_cap': 150000},
-            'BA': {'name': 'Boeing Company', 'industry': 'Industrial', 'market_cap': 150000},
+            # 'BA': {'name': 'Boeing Company', 'industry': 'Industrial', 'market_cap': 150000},
+            # 'CAT': {'name': 'Caterpillar Inc', 'industry': 'Industrial', 'market_cap': 150000},
+            # 'GE': {'name': 'General Electric Company', 'industry': 'Industrial', 'market_cap': 150000},
+            # 'HON': {'name': 'Honeywell International Inc', 'industry': 'Industrial', 'market_cap': 150000},
+            # 'RTX': {'name': 'Raytheon Technologies Corporation', 'industry': 'Industrial', 'market_cap': 150000},
+            # 'LMT': {'name': 'Lockheed Martin Corporation', 'industry': 'Industrial', 'market_cap': 120000},
+            # 'NOC': {'name': 'Northrop Grumman Corporation', 'industry': 'Industrial', 'market_cap': 70000},
+            # 'GD': {'name': 'General Dynamics Corporation', 'industry': 'Industrial', 'market_cap': 80000},
+            # 'DE': {'name': 'Deere & Company', 'industry': 'Industrial', 'market_cap': 120000},
+            # 'EMR': {'name': 'Emerson Electric Co', 'industry': 'Industrial', 'market_cap': 60000},
+            # 'ETN': {'name': 'Eaton Corporation plc', 'industry': 'Industrial', 'market_cap': 80000},
+            # 'ITW': {'name': 'Illinois Tool Works Inc', 'industry': 'Industrial', 'market_cap': 80000},
+            # 'JCI': {'name': 'Johnson Controls International plc', 'industry': 'Industrial', 'market_cap': 73000},
+            # 'EFX': {'name': 'Equifax Inc', 'industry': 'Industrial', 'market_cap': 26000},
+            # 'PH': {'name': 'Parker-Hannifin Corporation', 'industry': 'Industrial', 'market_cap': 60000},
+            # 'ROK': {'name': 'Rockwell Automation Inc', 'industry': 'Industrial', 'market_cap': 35000},
+            # 'AME': {'name': 'AMETEK Inc', 'industry': 'Industrial', 'market_cap': 35000},
+            # 'FTV': {'name': 'Fortive Corporation', 'industry': 'Industrial', 'market_cap': 30000},
+            # 'DOV': {'name': 'Dover Corporation', 'industry': 'Industrial', 'market_cap': 25000},
+            # 'GGG': {'name': 'Graco Inc', 'industry': 'Industrial', 'market_cap': 15000},
+            # 'GGG': {'name': 'Graco Inc', 'industry': 'Industrial', 'market_cap': 15000},
+            # 'DOV': {'name': 'Dover Corporation', 'industry': 'Industrial', 'market_cap': 25000},
+            # 'FTV': {'name': 'Fortive Corporation', 'industry': 'Industrial', 'market_cap': 30000},
+            # 'AME': {'name': 'AMETEK Inc', 'industry': 'Industrial', 'market_cap': 35000},
+            # 'ROK': {'name': 'Rockwell Automation Inc', 'industry': 'Industrial', 'market_cap': 35000},
+            # 'PH': {'name': 'Parker-Hannifin Corporation', 'industry': 'Industrial', 'market_cap': 60000},
+            # 'ITW': {'name': 'Illinois Tool Works Inc', 'industry': 'Industrial', 'market_cap': 80000},
+            # 'ETN': {'name': 'Eaton Corporation plc', 'industry': 'Industrial', 'market_cap': 80000},
+            # 'EMR': {'name': 'Emerson Electric Co', 'industry': 'Industrial', 'market_cap': 60000},
+            # 'DE': {'name': 'Deere & Company', 'industry': 'Industrial', 'market_cap': 120000},
+            # 'GD': {'name': 'General Dynamics Corporation', 'industry': 'Industrial', 'market_cap': 80000},
+            # 'NOC': {'name': 'Northrop Grumman Corporation', 'industry': 'Industrial', 'market_cap': 70000},
+            # 'LMT': {'name': 'Lockheed Martin Corporation', 'industry': 'Industrial', 'market_cap': 120000},
+            # 'RTX': {'name': 'Raytheon Technologies Corporation', 'industry': 'Industrial', 'market_cap': 150000},
+            # 'HON': {'name': 'Honeywell International Inc', 'industry': 'Industrial', 'market_cap': 150000},
+            # 'GE': {'name': 'General Electric Company', 'industry': 'Industrial', 'market_cap': 150000},
+            # 'CAT': {'name': 'Caterpillar Inc', 'industry': 'Industrial', 'market_cap': 150000},
+            # 'BA': {'name': 'Boeing Company', 'industry': 'Industrial', 'market_cap': 150000},
+            # 'JCI': {'name': 'Johnson Controls International plc', 'industry': 'Industrial', 'market_cap': 73000},
+            # 'EFX': {'name': 'Equifax Inc', 'industry': 'Industrial', 'market_cap': 26000},
             # Communication
-            'VZ': {'name': 'Verizon Communications Inc', 'industry': 'Communication', 'market_cap': 200000},
-            'T': {'name': 'AT&T Inc', 'industry': 'Communication', 'market_cap': 150000},
-            'CMCSA': {'name': 'Comcast Corporation', 'industry': 'Communication', 'market_cap': 200000},
-            'DIS': {'name': 'Walt Disney Company', 'industry': 'Communication', 'market_cap': 200000},
-            'NFLX': {'name': 'Netflix Inc', 'industry': 'Communication', 'market_cap': 250000},
-            'WBD': {'name': 'Warner Bros. Discovery Inc', 'industry': 'Communication', 'market_cap': 30000},
-            'FOXA': {'name': 'Fox Corporation', 'industry': 'Communication', 'market_cap': 15000},
-            'FOXA': {'name': 'Fox Corporation', 'industry': 'Communication', 'market_cap': 15000},
-            'WBD': {'name': 'Warner Bros. Discovery Inc', 'industry': 'Communication', 'market_cap': 30000},
-            'NFLX': {'name': 'Netflix Inc', 'industry': 'Communication', 'market_cap': 250000},
-            'DIS': {'name': 'Walt Disney Company', 'industry': 'Communication', 'market_cap': 200000},
-            'CMCSA': {'name': 'Comcast Corporation', 'industry': 'Communication', 'market_cap': 200000},
-            'T': {'name': 'AT&T Inc', 'industry': 'Communication', 'market_cap': 150000},
-            'VZ': {'name': 'Verizon Communications Inc', 'industry': 'Communication', 'market_cap': 200000},
+            # 'VZ': {'name': 'Verizon Communications Inc', 'industry': 'Communication', 'market_cap': 200000},
+            # 'T': {'name': 'AT&T Inc', 'industry': 'Communication', 'market_cap': 150000},
+            # 'CMCSA': {'name': 'Comcast Corporation', 'industry': 'Communication', 'market_cap': 200000},
+            # 'DIS': {'name': 'Walt Disney Company', 'industry': 'Communication', 'market_cap': 200000},
+            # 'NFLX': {'name': 'Netflix Inc', 'industry': 'Communication', 'market_cap': 250000},
+            # 'WBD': {'name': 'Warner Bros. Discovery Inc', 'industry': 'Communication', 'market_cap': 30000},
+            # 'FOXA': {'name': 'Fox Corporation', 'industry': 'Communication', 'market_cap': 15000},
+            # 'FOXA': {'name': 'Fox Corporation', 'industry': 'Communication', 'market_cap': 15000},
+            # 'WBD': {'name': 'Warner Bros. Discovery Inc', 'industry': 'Communication', 'market_cap': 30000},
+            # 'NFLX': {'name': 'Netflix Inc', 'industry': 'Communication', 'market_cap': 250000},
+            # 'DIS': {'name': 'Walt Disney Company', 'industry': 'Communication', 'market_cap': 200000},
+            # 'CMCSA': {'name': 'Comcast Corporation', 'industry': 'Communication', 'market_cap': 200000},
+            # 'T': {'name': 'AT&T Inc', 'industry': 'Communication', 'market_cap': 150000},
+            # 'VZ': {'name': 'Verizon Communications Inc', 'industry': 'Communication', 'market_cap': 200000},
             # Utilities
-            'NEE': {'name': 'NextEra Energy Inc', 'industry': 'Utilities', 'market_cap': 150000},
-            'DUK': {'name': 'Duke Energy Corporation', 'industry': 'Utilities', 'market_cap': 80000},
-            'SO': {'name': 'Southern Company', 'industry': 'Utilities', 'market_cap': 80000},
-            'AEP': {'name': 'American Electric Power Company Inc', 'industry': 'Utilities', 'market_cap': 50000},
-            'EXC': {'name': 'Exelon Corporation', 'industry': 'Utilities', 'market_cap': 40000},
-            'SRE': {'name': 'Sempra Energy', 'industry': 'Utilities', 'market_cap': 50000},
-            'XEL': {'name': 'Xcel Energy Inc', 'industry': 'Utilities', 'market_cap': 35000},
-            'WEC': {'name': 'WEC Energy Group Inc', 'industry': 'Utilities', 'market_cap': 30000},
-            'ES': {'name': 'Eversource Energy', 'industry': 'Utilities', 'market_cap': 25000},
-            'PEG': {'name': 'Public Service Enterprise Group Incorporated', 'industry': 'Utilities', 'market_cap': 35000},
-            'PEG': {'name': 'Public Service Enterprise Group Incorporated', 'industry': 'Utilities', 'market_cap': 35000},
-            'ES': {'name': 'Eversource Energy', 'industry': 'Utilities', 'market_cap': 25000},
-            'WEC': {'name': 'WEC Energy Group Inc', 'industry': 'Utilities', 'market_cap': 30000},
-            'XEL': {'name': 'Xcel Energy Inc', 'industry': 'Utilities', 'market_cap': 35000},
-            'SRE': {'name': 'Sempra Energy', 'industry': 'Utilities', 'market_cap': 50000},
-            'EXC': {'name': 'Exelon Corporation', 'industry': 'Utilities', 'market_cap': 40000},
-            'AEP': {'name': 'American Electric Power Company Inc', 'industry': 'Utilities', 'market_cap': 50000},
-            'SO': {'name': 'Southern Company', 'industry': 'Utilities', 'market_cap': 80000},
-            'DUK': {'name': 'Duke Energy Corporation', 'industry': 'Utilities', 'market_cap': 80000},
-            'NEE': {'name': 'NextEra Energy Inc', 'industry': 'Utilities', 'market_cap': 150000},
+            # 'NEE': {'name': 'NextEra Energy Inc', 'industry': 'Utilities', 'market_cap': 150000},
+            # 'DUK': {'name': 'Duke Energy Corporation', 'industry': 'Utilities', 'market_cap': 80000},
+            # 'SO': {'name': 'Southern Company', 'industry': 'Utilities', 'market_cap': 80000},
+            # 'AEP': {'name': 'American Electric Power Company Inc', 'industry': 'Utilities', 'market_cap': 50000},
+            # 'EXC': {'name': 'Exelon Corporation', 'industry': 'Utilities', 'market_cap': 40000},
+            # 'SRE': {'name': 'Sempra Energy', 'industry': 'Utilities', 'market_cap': 50000},
+            # 'XEL': {'name': 'Xcel Energy Inc', 'industry': 'Utilities', 'market_cap': 35000},
+            # 'WEC': {'name': 'WEC Energy Group Inc', 'industry': 'Utilities', 'market_cap': 30000},
+            # 'ES': {'name': 'Eversource Energy', 'industry': 'Utilities', 'market_cap': 25000},
+            # 'PEG': {'name': 'Public Service Enterprise Group Incorporated', 'industry': 'Utilities', 'market_cap': 35000},
+            # 'PEG': {'name': 'Public Service Enterprise Group Incorporated', 'industry': 'Utilities', 'market_cap': 35000},
+            # 'ES': {'name': 'Eversource Energy', 'industry': 'Utilities', 'market_cap': 25000},
+            # 'WEC': {'name': 'WEC Energy Group Inc', 'industry': 'Utilities', 'market_cap': 30000},
+            # 'XEL': {'name': 'Xcel Energy Inc', 'industry': 'Utilities', 'market_cap': 35000},
+            # 'SRE': {'name': 'Sempra Energy', 'industry': 'Utilities', 'market_cap': 50000},
+            # 'EXC': {'name': 'Exelon Corporation', 'industry': 'Utilities', 'market_cap': 40000},
+            # 'AEP': {'name': 'American Electric Power Company Inc', 'industry': 'Utilities', 'market_cap': 50000},
+            # 'SO': {'name': 'Southern Company', 'industry': 'Utilities', 'market_cap': 80000},
+            # 'DUK': {'name': 'Duke Energy Corporation', 'industry': 'Utilities', 'market_cap': 80000},
+            # 'NEE': {'name': 'NextEra Energy Inc', 'industry': 'Utilities', 'market_cap': 150000},
             # Real Estate
-            'AMT': {'name': 'American Tower Corporation', 'industry': 'Real Estate', 'market_cap': 100000},
-            'PLD': {'name': 'Prologis Inc', 'industry': 'Real Estate', 'market_cap': 120000},
-            'EQIX': {'name': 'Equinix Inc', 'industry': 'Real Estate', 'market_cap': 80000},
-            'PSA': {'name': 'Public Storage', 'industry': 'Real Estate', 'market_cap': 60000},
-            'WELL': {'name': 'Welltower Inc', 'industry': 'Real Estate', 'market_cap': 50000},
-            'VICI': {'name': 'VICI Properties Inc', 'industry': 'Real Estate', 'market_cap': 30000},
-            'SPG': {'name': 'Simon Property Group Inc', 'industry': 'Real Estate', 'market_cap': 50000},
-            'O': {'name': 'Realty Income Corporation', 'industry': 'Real Estate', 'market_cap': 50000},
-            'DLR': {'name': 'Digital Realty Trust Inc', 'industry': 'Real Estate', 'market_cap': 40000},
-            'EXPI': {'name': 'eXp World Holdings Inc', 'industry': 'Real Estate', 'market_cap': 2000},
-            'EXPI': {'name': 'eXp World Holdings Inc', 'industry': 'Real Estate', 'market_cap': 2000},
-            'DLR': {'name': 'Digital Realty Trust Inc', 'industry': 'Real Estate', 'market_cap': 40000},
-            'O': {'name': 'Realty Income Corporation', 'industry': 'Real Estate', 'market_cap': 50000},
-            'SPG': {'name': 'Simon Property Group Inc', 'industry': 'Real Estate', 'market_cap': 50000},
-            'VICI': {'name': 'VICI Properties Inc', 'industry': 'Real Estate', 'market_cap': 30000},
-            'WELL': {'name': 'Welltower Inc', 'industry': 'Real Estate', 'market_cap': 50000},
-            'PSA': {'name': 'Public Storage', 'industry': 'Real Estate', 'market_cap': 60000},
-            'EQIX': {'name': 'Equinix Inc', 'industry': 'Real Estate', 'market_cap': 80000},
-            'PLD': {'name': 'Prologis Inc', 'industry': 'Real Estate', 'market_cap': 120000},
-            'AMT': {'name': 'American Tower Corporation', 'industry': 'Real Estate', 'market_cap': 100000},
+            # 'AMT': {'name': 'American Tower Corporation', 'industry': 'Real Estate', 'market_cap': 100000},
+            # 'PLD': {'name': 'Prologis Inc', 'industry': 'Real Estate', 'market_cap': 120000},
+            # 'EQIX': {'name': 'Equinix Inc', 'industry': 'Real Estate', 'market_cap': 80000},
+            # 'PSA': {'name': 'Public Storage', 'industry': 'Real Estate', 'market_cap': 60000},
+            # 'WELL': {'name': 'Welltower Inc', 'industry': 'Real Estate', 'market_cap': 50000},
+            # 'VICI': {'name': 'VICI Properties Inc', 'industry': 'Real Estate', 'market_cap': 30000},
+            # 'SPG': {'name': 'Simon Property Group Inc', 'industry': 'Real Estate', 'market_cap': 50000},
+            # 'O': {'name': 'Realty Income Corporation', 'industry': 'Real Estate', 'market_cap': 50000},
+            # 'DLR': {'name': 'Digital Realty Trust Inc', 'industry': 'Real Estate', 'market_cap': 40000},
+            # 'EXPI': {'name': 'eXp World Holdings Inc', 'industry': 'Real Estate', 'market_cap': 2000},
+            # 'EXPI': {'name': 'eXp World Holdings Inc', 'industry': 'Real Estate', 'market_cap': 2000},
+            # 'DLR': {'name': 'Digital Realty Trust Inc', 'industry': 'Real Estate', 'market_cap': 40000},
+            # 'O': {'name': 'Realty Income Corporation', 'industry': 'Real Estate', 'market_cap': 50000},
+            # 'SPG': {'name': 'Simon Property Group Inc', 'industry': 'Real Estate', 'market_cap': 50000},
+            # 'VICI': {'name': 'VICI Properties Inc', 'industry': 'Real Estate', 'market_cap': 30000},
+            # 'WELL': {'name': 'Welltower Inc', 'industry': 'Real Estate', 'market_cap': 50000},
+            # 'PSA': {'name': 'Public Storage', 'industry': 'Real Estate', 'market_cap': 60000},
+            # 'EQIX': {'name': 'Equinix Inc', 'industry': 'Real Estate', 'market_cap': 80000},
+            # 'PLD': {'name': 'Prologis Inc', 'industry': 'Real Estate', 'market_cap': 120000},
+            # 'AMT': {'name': 'American Tower Corporation', 'industry': 'Real Estate', 'market_cap': 100000},
             # Materials
-            'LIN': {'name': 'Linde plc', 'industry': 'Materials', 'market_cap': 200000},
-            'APD': {'name': 'Air Products and Chemicals Inc', 'industry': 'Materials', 'market_cap': 60000},
-            'ECL': {'name': 'Ecolab Inc', 'industry': 'Materials', 'market_cap': 60000},
-            'SHW': {'name': 'Sherwin-Williams Company', 'industry': 'Materials', 'market_cap': 80000},
-            'PPG': {'name': 'PPG Industries Inc', 'industry': 'Materials', 'market_cap': 35000},
-            'DD': {'name': 'DuPont de Nemours Inc', 'industry': 'Materials', 'market_cap': 35000},
-            'FCX': {'name': 'Freeport-McMoRan Inc', 'industry': 'Materials', 'market_cap': 60000},
-            'NEM': {'name': 'Newmont Corporation', 'industry': 'Materials', 'market_cap': 50000},
-            'VALE': {'name': 'Vale S.A.', 'industry': 'Materials', 'market_cap': 60000},
-            'RIO': {'name': 'Rio Tinto Group', 'industry': 'Materials', 'market_cap': 120000},
-            'BHP': {'name': 'BHP Group Limited', 'industry': 'Materials', 'market_cap': 150000},
-            'BHP': {'name': 'BHP Group Limited', 'industry': 'Materials', 'market_cap': 150000},
-            'RIO': {'name': 'Rio Tinto Group', 'industry': 'Materials', 'market_cap': 120000},
-            'VALE': {'name': 'Vale S.A.', 'industry': 'Materials', 'market_cap': 60000},
-            'NEM': {'name': 'Newmont Corporation', 'industry': 'Materials', 'market_cap': 50000},
-            'FCX': {'name': 'Freeport-McMoRan Inc', 'industry': 'Materials', 'market_cap': 60000},
-            'DD': {'name': 'DuPont de Nemours Inc', 'industry': 'Materials', 'market_cap': 35000},
-            'PPG': {'name': 'PPG Industries Inc', 'industry': 'Materials', 'market_cap': 35000},
-            'SHW': {'name': 'Sherwin-Williams Company', 'industry': 'Materials', 'market_cap': 80000},
-            'ECL': {'name': 'Ecolab Inc', 'industry': 'Materials', 'market_cap': 60000},
-            'APD': {'name': 'Air Products and Chemicals Inc', 'industry': 'Materials', 'market_cap': 60000},
-            'LIN': {'name': 'Linde plc', 'industry': 'Materials', 'market_cap': 200000},
+            # 'LIN': {'name': 'Linde plc', 'industry': 'Materials', 'market_cap': 200000},
+            # 'APD': {'name': 'Air Products and Chemicals Inc', 'industry': 'Materials', 'market_cap': 60000},
+            # 'ECL': {'name': 'Ecolab Inc', 'industry': 'Materials', 'market_cap': 60000},
+            # 'SHW': {'name': 'Sherwin-Williams Company', 'industry': 'Materials', 'market_cap': 80000},
+            # 'PPG': {'name': 'PPG Industries Inc', 'industry': 'Materials', 'market_cap': 35000},
+            # 'DD': {'name': 'DuPont de Nemours Inc', 'industry': 'Materials', 'market_cap': 35000},
+            # 'FCX': {'name': 'Freeport-McMoRan Inc', 'industry': 'Materials', 'market_cap': 60000},
+            # 'NEM': {'name': 'Newmont Corporation', 'industry': 'Materials', 'market_cap': 50000},
+            # 'VALE': {'name': 'Vale S.A.', 'industry': 'Materials', 'market_cap': 60000},
+            # 'RIO': {'name': 'Rio Tinto Group', 'industry': 'Materials', 'market_cap': 120000},
+            # 'BHP': {'name': 'BHP Group Limited', 'industry': 'Materials', 'market_cap': 150000},
+            # 'BHP': {'name': 'BHP Group Limited', 'industry': 'Materials', 'market_cap': 150000},
+            # 'RIO': {'name': 'Rio Tinto Group', 'industry': 'Materials', 'market_cap': 120000},
+            # 'VALE': {'name': 'Vale S.A.', 'industry': 'Materials', 'market_cap': 60000},
+            # 'NEM': {'name': 'Newmont Corporation', 'industry': 'Materials', 'market_cap': 50000},
+            # 'FCX': {'name': 'Freeport-McMoRan Inc', 'industry': 'Materials', 'market_cap': 60000},
+            # 'DD': {'name': 'DuPont de Nemours Inc', 'industry': 'Materials', 'market_cap': 35000},
+            # 'PPG': {'name': 'PPG Industries Inc', 'industry': 'Materials', 'market_cap': 35000},
+            # 'SHW': {'name': 'Sherwin-Williams Company', 'industry': 'Materials', 'market_cap': 80000},
+            # 'ECL': {'name': 'Ecolab Inc', 'industry': 'Materials', 'market_cap': 60000},
+            # 'APD': {'name': 'Air Products and Chemicals Inc', 'industry': 'Materials', 'market_cap': 60000},
+            # 'LIN': {'name': 'Linde plc', 'industry': 'Materials', 'market_cap': 200000},
             # ETFs & Indices
-            'SPY': {'name': 'SPDR S&P 500 ETF Trust', 'industry': 'ETFs', 'market_cap': 500000},
-            'QQQ': {'name': 'Invesco QQQ Trust', 'industry': 'ETFs', 'market_cap': 250000},
-            'DIA': {'name': 'SPDR Dow Jones Industrial Average ETF', 'industry': 'ETFs', 'market_cap': 30000},
-            'IWM': {'name': 'iShares Russell 2000 ETF', 'industry': 'ETFs', 'market_cap': 60000},
-            'VTI': {'name': 'Vanguard Total Stock Market ETF', 'industry': 'ETFs', 'market_cap': 400000},
-            'VOO': {'name': 'Vanguard S&P 500 ETF', 'industry': 'ETFs', 'market_cap': 400000},
-            'IVV': {'name': 'iShares Core S&P 500 ETF', 'industry': 'ETFs', 'market_cap': 400000},
-            'EEM': {'name': 'iShares MSCI Emerging Markets ETF', 'industry': 'ETFs', 'market_cap': 20000},
-            'EFA': {'name': 'iShares MSCI EAFE ETF', 'industry': 'ETFs', 'market_cap': 50000},
-            'GLD': {'name': 'SPDR Gold Shares', 'industry': 'ETFs', 'market_cap': 60000},
-            'SLV': {'name': 'iShares Silver Trust', 'industry': 'ETFs', 'market_cap': 15000},
-            'TLT': {'name': 'iShares 20+ Year Treasury Bond ETF', 'industry': 'ETFs', 'market_cap': 40000},
-            'HYG': {'name': 'iShares iBoxx $ High Yield Corporate Bond ETF', 'industry': 'ETFs', 'market_cap': 20000},
-            'LQD': {'name': 'iShares iBoxx $ Investment Grade Corporate Bond ETF', 'industry': 'ETFs', 'market_cap': 30000},
-            'XLF': {'name': 'Financial Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 40000},
-            'XLE': {'name': 'Energy Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 40000},
-            'XLK': {'name': 'Technology Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 50000},
-            'XLV': {'name': 'Health Care Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 40000},
-            'XLI': {'name': 'Industrial Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 15000},
-            'XLP': {'name': 'Consumer Staples Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 20000},
-            'XLY': {'name': 'Consumer Discretionary Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 20000},
-            'XLB': {'name': 'Materials Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 10000},
-            'XLU': {'name': 'Utilities Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 12000},
-            'XLC': {'name': 'Communication Services Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 15000},
-            'XLRE': {'name': 'Real Estate Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 5000},
-            'SMH': {'name': 'VanEck Semiconductor ETF', 'industry': 'ETFs', 'market_cap': 12000},
-            'ARKK': {'name': 'ARK Innovation ETF', 'industry': 'ETFs', 'market_cap': 8000},
-            'TQQQ': {'name': 'ProShares UltraPro QQQ', 'industry': 'ETFs', 'market_cap': 20000},
-            'SPXL': {'name': 'Direxion Daily S&P 500 Bull 3X Shares', 'industry': 'ETFs', 'market_cap': 5000},
-        }
-        return companies
+            # 'SPY': {'name': 'SPDR S&P 500 ETF Trust', 'industry': 'ETFs', 'market_cap': 500000},
+            # 'QQQ': {'name': 'Invesco QQQ Trust', 'industry': 'ETFs', 'market_cap': 250000},
+            # 'DIA': {'name': 'SPDR Dow Jones Industrial Average ETF', 'industry': 'ETFs', 'market_cap': 30000},
+            # 'IWM': {'name': 'iShares Russell 2000 ETF', 'industry': 'ETFs', 'market_cap': 60000},
+            # 'VTI': {'name': 'Vanguard Total Stock Market ETF', 'industry': 'ETFs', 'market_cap': 400000},
+            # 'VOO': {'name': 'Vanguard S&P 500 ETF', 'industry': 'ETFs', 'market_cap': 400000},
+            # 'IVV': {'name': 'iShares Core S&P 500 ETF', 'industry': 'ETFs', 'market_cap': 400000},
+            # 'EEM': {'name': 'iShares MSCI Emerging Markets ETF', 'industry': 'ETFs', 'market_cap': 20000},
+            # 'EFA': {'name': 'iShares MSCI EAFE ETF', 'industry': 'ETFs', 'market_cap': 50000},
+            # 'GLD': {'name': 'SPDR Gold Shares', 'industry': 'ETFs', 'market_cap': 60000},
+            # 'SLV': {'name': 'iShares Silver Trust', 'industry': 'ETFs', 'market_cap': 15000},
+            # 'TLT': {'name': 'iShares 20+ Year Treasury Bond ETF', 'industry': 'ETFs', 'market_cap': 40000},
+            # 'HYG': {'name': 'iShares iBoxx $ High Yield Corporate Bond ETF', 'industry': 'ETFs', 'market_cap': 20000},
+            # 'LQD': {'name': 'iShares iBoxx $ Investment Grade Corporate Bond ETF', 'industry': 'ETFs', 'market_cap': 30000},
+            # 'XLF': {'name': 'Financial Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 40000},
+            # 'XLE': {'name': 'Energy Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 40000},
+            # 'XLK': {'name': 'Technology Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 50000},
+            # 'XLV': {'name': 'Health Care Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 40000},
+            # 'XLI': {'name': 'Industrial Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 15000},
+            # 'XLP': {'name': 'Consumer Staples Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 20000},
+            # 'XLY': {'name': 'Consumer Discretionary Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 20000},
+            # 'XLB': {'name': 'Materials Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 10000},
+            # 'XLU': {'name': 'Utilities Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 12000},
+            # 'XLC': {'name': 'Communication Services Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 15000},
+            # 'XLRE': {'name': 'Real Estate Select Sector SPDR Fund', 'industry': 'ETFs', 'market_cap': 5000},
+            # 'SMH': {'name': 'VanEck Semiconductor ETF', 'industry': 'ETFs', 'market_cap': 12000},
+            # 'ARKK': {'name': 'ARK Innovation ETF', 'industry': 'ETFs', 'market_cap': 8000},
+            # 'TQQQ': {'name': 'ProShares UltraPro QQQ', 'industry': 'ETFs', 'market_cap': 20000},
+            # 'SPXL': {'name': 'Direxion Daily S&P 500 Bull 3X Shares', 'industry': 'ETFs', 'market_cap': 5000},
+        # }
+        # return companies
     
     def search_google_news_rss(self, event_types: List[str] = None) -> List[Dict]:
         """
@@ -7791,11 +8456,45 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
         
         try:
             import yfinance as yf
+            # Ensure SSL verification is disabled (re-apply patch in case session was created before patching)
+            try:
+                import ssl
+                import certifi
+                import os
+                
+                # Re-apply certificate environment variables
+                system_cert = '/private/etc/ssl/cert.pem'
+                certifi_cert = certifi.where()
+                if os.path.exists(system_cert) and os.access(system_cert, os.R_OK):
+                    cert_path = system_cert
+                else:
+                    cert_path = certifi_cert
+                os.environ['SSL_CERT_FILE'] = cert_path
+                os.environ['REQUESTS_CA_BUNDLE'] = cert_path
+                os.environ['CURL_CA_BUNDLE'] = cert_path
+                
+                # Re-patch curl_cffi to ensure verify=False (in case session was created before patching)
+                import curl_cffi.requests as curl_requests
+                if not hasattr(curl_requests.Session.request, '_patched_for_yfinance'):
+                    original_request = curl_requests.Session.request
+                    def patched_request(self, *args, **kwargs):
+                        kwargs['verify'] = False
+                        return original_request(self, *args, **kwargs)
+                    patched_request._patched_for_yfinance = True
+                    curl_requests.Session.request = patched_request
+            except Exception as ssl_patch_error:
+                # If SSL patching fails, continue anyway - the __init__ patch might still work
+                pass
+            
             ticker_obj = yf.Ticker(ticker)
             
             # Fetch earnings dates (includes both past and future)
             try:
                 earnings_dates = ticker_obj.get_earnings_dates(limit=100)
+                if earnings_dates is None or len(earnings_dates) == 0:
+                    print(f"[EVENT FETCH] yfinance: No earnings dates found for {ticker}")
+                else:
+                    print(f"[EVENT FETCH] yfinance {ticker}: Found {len(earnings_dates)} total earnings dates")
                 if earnings_dates is not None and len(earnings_dates) > 0:
                     # Handle timezone conversion
                     if earnings_dates.index.tz is not None:
@@ -7812,6 +8511,24 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                         (earnings_dates.index >= start_dt) & 
                         (earnings_dates.index <= end_dt)
                     ]
+                    # Ensure earnings_during is a DataFrame (not Series or list)
+                    if not isinstance(earnings_during, type(earnings_dates)):
+                        # If it's a Series or single row, convert to DataFrame
+                        import pandas as pd
+                        if isinstance(earnings_during, pd.Series):
+                            earnings_during = earnings_during.to_frame().T
+                        elif len(earnings_during) == 0:
+                            earnings_during = pd.DataFrame()
+                    
+                    # Debug: Log filtering results
+                    if len(earnings_during) == 0 and len(earnings_dates) > 0:
+                        print(f"[EVENT FETCH] yfinance {ticker}: Found {len(earnings_dates)} total earnings dates, but 0 in range {start_dt.strftime('%Y-%m-%d')} to {end_dt.strftime('%Y-%m-%d')}")
+                        # Show first few dates for debugging
+                        if len(earnings_dates) > 0:
+                            first_dates = earnings_dates.index[:5] if len(earnings_dates) >= 5 else earnings_dates.index
+                            print(f"[EVENT FETCH] yfinance {ticker}: Sample earnings dates: {[str(d.date()) for d in first_dates]}")
+                    elif len(earnings_during) > 0:
+                        print(f"[EVENT FETCH] yfinance {ticker}: Found {len(earnings_during)} earnings in range {start_dt.strftime('%Y-%m-%d')} to {end_dt.strftime('%Y-%m-%d')}")
                     
                     # Filter next events (future)
                     if future_days > 0:
@@ -7819,49 +8536,64 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                             (earnings_dates.index > end_dt) & 
                             (earnings_dates.index <= future_end_dt)
                         ]
+                        # Ensure earnings_next is a DataFrame
+                        if not isinstance(earnings_next, type(earnings_dates)):
+                            import pandas as pd
+                            if isinstance(earnings_next, pd.Series):
+                                earnings_next = earnings_next.to_frame().T
+                            elif len(earnings_next) == 0:
+                                earnings_next = pd.DataFrame()
                     else:
                         earnings_next = []
                     
                     # Convert to events_during format
-                    for date_idx, row in earnings_during.iterrows():
-                        event_date = date_idx
-                        if event_date.tz is not None:
-                            event_date_utc = event_date.astimezone(timezone.utc)
-                        else:
-                            event_date_utc = event_date.replace(tzinfo=timezone.utc)
-                        
-                        result['events_during'].append({
-                            'date': event_date_utc.strftime('%Y-%m-%d'),
-                            'type': 'earnings',
-                            'name': 'Earnings',
-                            'form': 'yfinance',
-                            'description': f"Earnings - {row.get('EPS Estimate', 'N/A')} estimate" if 'EPS Estimate' in row else 'Earnings'
-                        })
-                        result['has_events_during'] = True
+                    if len(earnings_during) > 0:
+                        for date_idx, row in earnings_during.iterrows():
+                            event_date = date_idx
+                            if event_date.tz is not None:
+                                event_date_utc = event_date.astimezone(timezone.utc)
+                            else:
+                                event_date_utc = event_date.replace(tzinfo=timezone.utc)
+                            
+                            result['events_during'].append({
+                                'date': event_date_utc.strftime('%Y-%m-%d'),
+                                'type': 'earnings',
+                                'name': 'Earnings',
+                                'form': 'yfinance',
+                                'description': f"Earnings - {row.get('EPS Estimate', 'N/A')} estimate" if 'EPS Estimate' in row else 'Earnings'
+                            })
+                            result['has_events_during'] = True
                     
                     # Convert to next_events format
-                    for date_idx, row in earnings_next.iterrows():
-                        event_date = date_idx
-                        if event_date.tz is not None:
-                            event_date_utc = event_date.astimezone(timezone.utc)
-                        else:
-                            event_date_utc = event_date.replace(tzinfo=timezone.utc)
-                        
-                        result['next_events'].append({
-                            'date': event_date_utc.strftime('%Y-%m-%d'),
-                            'type': 'earnings',
-                            'name': 'Earnings',
-                            'form': 'yfinance',
-                            'description': f"Earnings - {row.get('EPS Estimate', 'N/A')} estimate" if 'EPS Estimate' in row else 'Earnings'
-                        })
-                        result['has_next_events'] = True
+                    if len(earnings_next) > 0:
+                        for date_idx, row in earnings_next.iterrows():
+                            event_date = date_idx
+                            if event_date.tz is not None:
+                                event_date_utc = event_date.astimezone(timezone.utc)
+                            else:
+                                event_date_utc = event_date.replace(tzinfo=timezone.utc)
+                            
+                            result['next_events'].append({
+                                'date': event_date_utc.strftime('%Y-%m-%d'),
+                                'type': 'earnings',
+                                'name': 'Earnings',
+                                'form': 'yfinance',
+                                'description': f"Earnings - {row.get('EPS Estimate', 'N/A')} estimate" if 'EPS Estimate' in row else 'Earnings'
+                            })
+                            result['has_next_events'] = True
             except Exception as e:
                 # Earnings fetch failed, continue with dividends
-                pass
+                error_msg = str(e)[:200]
+                print(f"[EVENT FETCH] yfinance earnings error for {ticker}: {error_msg}")
+                # If it's an SSL error, log it more prominently
+                if 'SSL' in error_msg or 'certificate' in error_msg or 'curl' in error_msg:
+                    print(f"[EVENT FETCH] ⚠️  yfinance SSL/certificate error for {ticker} - earnings dates cannot be fetched")
             
             # Fetch dividends
             try:
                 dividends = ticker_obj.dividends
+                if dividends is None or len(dividends) == 0:
+                    print(f"[EVENT FETCH] yfinance: No dividends found for {ticker}")
                 if dividends is not None and len(dividends) > 0:
                     # Handle timezone conversion
                     if dividends.index.tz is not None:
@@ -7878,6 +8610,11 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                         (dividends.index >= start_dt) & 
                         (dividends.index <= end_dt)
                     ]
+                    # Debug: Log filtering results
+                    if len(dividends_during) == 0 and len(dividends) > 0:
+                        print(f"[EVENT FETCH] yfinance {ticker}: Found {len(dividends)} total dividends, but 0 in range {start_dt.strftime('%Y-%m-%d')} to {end_dt.strftime('%Y-%m-%d')}")
+                    elif len(dividends_during) > 0:
+                        print(f"[EVENT FETCH] yfinance {ticker}: Found {len(dividends_during)} dividends in range {start_dt.strftime('%Y-%m-%d')} to {end_dt.strftime('%Y-%m-%d')}")
                     
                     # Filter next dividends (future)
                     if future_days > 0:
@@ -7925,11 +8662,11 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                         result['has_next_events'] = True
             except Exception as e:
                 # Dividends fetch failed, continue
-                pass
+                print(f"[EVENT FETCH] yfinance dividends error for {ticker}: {str(e)[:100]}")
                 
         except Exception as e:
             # yfinance not available or error occurred
-            pass
+            print(f"[EVENT FETCH] yfinance general error for {ticker}: {str(e)[:100]}")
         
         return result
     
@@ -8293,6 +9030,12 @@ Just the number, nothing else."""
             Dictionary with 'score' (1-10) and 'explanation' (detailed text) or None if error
         """
         if not self.claude_api_key:
+            print(f"[AI OPINION] No API key configured")
+            return None
+        
+        # Check if API key is still placeholder
+        if self.claude_api_key == 'sk-ant-api03-YourActualClaudeAPIKeyHere-ReplaceThisWithYourRealKey':
+            print(f"[AI OPINION] API key is still using placeholder value. Please update config.py with your actual API key.")
             return None
         
         try:
@@ -8339,6 +9082,16 @@ UPCOMING EVENTS:
 STRATEGY CONTEXT:
 The trader uses vertical call options and hopes to sell if the stock bounces back up within 40 days. They don't necessarily wait for expiration.
 
+MY TRADING STRATEGY REQUIREMENTS:
+- Stable, liquid ETFs or large-cap stocks
+- Strong, clean trends
+- Predictable behavior
+- No micro-caps, no penny stocks
+- No unprofitable biotech or speculative companies
+- No inverse ETFs, no volatility ETFs, no decay products
+- No leveraged inverse products
+- Optional: Leveraged long ETFs only if trend-friendly
+
 TASK:
 1. IMPORTANT: Search the web to find specific news about why {ticker} ({company_name}) dropped {stock_data['pct_drop']:.2f}% on {bearish_date_formatted} ({stock_data['bearish_date']}). 
    Search for: "{ticker} stock drop {bearish_date_formatted}" or "{company_name} news {bearish_date_formatted}" or "{ticker} analyst {bearish_date_formatted}"
@@ -8357,28 +9110,42 @@ TASK:
    - RSI-like patterns (overbought/oversold conditions)
    - Historical recovery patterns
 
-3. Based on your research and analysis, provide:
+3. Evaluate whether this ticker fits my trading strategy:
+   IMPORTANT: Apply the strategy requirements STRICTLY. If the ticker violates ANY of the "no" requirements, it does NOT fit.
+   
+   - Provide a strategy fit score (1-10) for how well it fits my strategy:
+     * 1-3: Does NOT fit (violates key requirements)
+     * 4-6: Partially fits (meets some but not all requirements)
+     * 7-10: Fits well (meets most/all requirements)
+   
+   - Provide a short explanation (2-4 sentences) on strategy fit
+   
+   - Provide a clear Yes/No on whether it fits:
+     * "Yes" ONLY if it meets all the positive requirements AND does not violate any "no" requirements
+     * "No" if it violates ANY "no" requirement (e.g., unprofitable biotech, micro-cap, penny stock, inverse ETF, etc.)
+     * Do NOT use "Partially" - use only "Yes" or "No"
+   
+   - List the key reasons why (volatility, market cap, sector, decay risk, trend quality, profitability, etc.):
+     * Be specific about which requirements it meets or violates
+     * If it's a biotech, clearly state if it's profitable or unprofitable
+     * If it's small-cap, state the market cap and whether it qualifies as large-cap
+     * If it's an ETF, state the type (inverse, leveraged, volatility, etc.)
+
+4. Based on your research and analysis, provide:
    - A recovery probability score (1-10):
      * 1-4: Low recovery probability (weak bounce expected)
      * 5-7: Moderate recovery probability (some bounce possible)
      * 8-10: High recovery probability (strong bounce likely)
    
-   - A detailed explanation covering:
-     * Why the stock fell (based on your web search/knowledge)
-     * Recovery likelihood assessment based on:
-       - News/research findings (emotional vs structural drop)
-       - Price history analysis (support/resistance, trends)
-       - Market conditions and sector analysis
-       - Upcoming events impact
-     * Risk factors for vertical call options strategy
-     * Timeframe assessment (can it recover in 40 days?)
+   - Explain why you gave this specific recovery score and whether you think it will recover or not
+   - Briefly explain the reason the stock fell (based on your web search/knowledge)
 
 CRITICAL: Respond ONLY with valid JSON. Do not include any text before or after the JSON. Do not wrap the JSON in markdown code blocks. Do not include explanatory text.
 
 Respond in this exact JSON format (no additional text, no markdown, just pure JSON):
 {{
-  "score": <number 1-10>,
-  "explanation": "<detailed explanation text>"
+  "score": <recovery probability score 1-10>,
+  "explanation": "<structured explanation with the following sections:\\n\\n1. STRATEGY FIT EVALUATION:\\n   - Strategy Fit Score: <1-10>\\n   - Short Explanation: <2-4 sentences explaining how well it fits the strategy>\\n   - Fits Strategy: <Yes or No - MUST be exactly 'Yes' or 'No', not 'Partially'>\\n   - Key Reasons: <Specific reasons why it fits or doesn't fit, including:\\n     * Market cap (large-cap vs small-cap/micro-cap)\\n     * Volatility level\\n     * Sector (and if biotech, whether profitable or unprofitable)\\n     * Trend quality (strong/clean vs weak/choppy)\\n     * Decay risk (for ETFs)\\n     * Profitability status\\n     * Any violations of 'no' requirements>\\n\\n2. RECOVERY SCORE EXPLANATION:\\n   - Why this recovery score: <explanation of why you gave this specific recovery score>\\n   - Will it recover: <Yes/No and brief reasoning>\\n\\n3. REASON FOR THE FALL:\\n   - <Brief explanation of why the stock fell, based on web search results>"
 }}
 
 The explanation should be plain text with proper line breaks. Use \\n for newlines within the JSON string. Do not include the JSON structure as part of the explanation text itself."""
@@ -8401,8 +9168,98 @@ The explanation should be plain text with proper line breaks. Use \\n for newlin
                 ]
             }
             
-            response = requests.post(self.claude_api_url, headers=headers, json=payload, timeout=90, verify=False)
+            # Retry logic for network issues
+            max_retries = 3
+            retry_delay = 2  # seconds
+            last_exception = None
+            response = None
             
+            for attempt in range(max_retries):
+                try:
+                    response = requests.post(
+                        self.claude_api_url, 
+                        headers=headers, 
+                        json=payload, 
+                        timeout=90, 
+                        verify=False
+                    )
+                    
+                    if response.status_code == 200:
+                        break  # Success, exit retry loop
+                    
+                    # Handle non-200 status codes
+                    print(f"[AI OPINION] API request failed with status {response.status_code} (attempt {attempt + 1}/{max_retries})")
+                    try:
+                        error_data = response.json()
+                        print(f"[AI OPINION] Error response: {error_data}")
+                        
+                        # Don't retry on authentication errors (401) or bad requests (400)
+                        if response.status_code in [400, 401, 403]:
+                            return None
+                    except:
+                        print(f"[AI OPINION] Error response text: {response.text[:500]}")
+                    
+                    # Retry on server errors (5xx) or rate limits (429)
+                    if response.status_code in [429, 500, 502, 503, 504] and attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                        print(f"[AI OPINION] Retrying in {wait_time} seconds...")
+                        time_module.sleep(wait_time)
+                        continue
+                    else:
+                        return None
+                        
+                except requests.exceptions.Timeout:
+                    last_exception = "Timeout"
+                    print(f"[AI OPINION] Request timeout (attempt {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        print(f"[AI OPINION] Retrying in {wait_time} seconds...")
+                        time_module.sleep(wait_time)
+                    else:
+                        print(f"[AI OPINION] Max retries reached. Timeout error.")
+                        return None
+                        
+                except requests.exceptions.ConnectionError as e:
+                    last_exception = f"ConnectionError: {str(e)[:100]}"
+                    print(f"[AI OPINION] Connection error (attempt {attempt + 1}/{max_retries}): {str(e)[:100]}")
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        print(f"[AI OPINION] Retrying in {wait_time} seconds...")
+                        time_module.sleep(wait_time)
+                    else:
+                        print(f"[AI OPINION] Max retries reached. Connection error: {str(e)[:200]}")
+                        return None
+                        
+                except requests.exceptions.RequestException as e:
+                    last_exception = f"RequestException: {str(e)[:100]}"
+                    print(f"[AI OPINION] Request error (attempt {attempt + 1}/{max_retries}): {str(e)[:100]}")
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        print(f"[AI OPINION] Retrying in {wait_time} seconds...")
+                        time_module.sleep(wait_time)
+                    else:
+                        print(f"[AI OPINION] Max retries reached. Request error: {str(e)[:200]}")
+                        return None
+                        
+                except Exception as e:
+                    last_exception = f"Unexpected error: {str(e)[:100]}"
+                    print(f"[AI OPINION] Unexpected error (attempt {attempt + 1}/{max_retries}): {str(e)[:100]}")
+                    import traceback
+                    traceback.print_exc()
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        print(f"[AI OPINION] Retrying in {wait_time} seconds...")
+                        time_module.sleep(wait_time)
+                    else:
+                        print(f"[AI OPINION] Max retries reached. Error: {str(e)[:200]}")
+                        return None
+            
+            # Check if we got a successful response
+            if response is None or response.status_code != 200:
+                print(f"[AI OPINION] Failed after {max_retries} attempts. Last error: {last_exception}")
+                return None
+            
+            # Process successful response
             if response.status_code == 200:
                 data = response.json()
                 content = data.get('content', [])
@@ -8499,7 +9356,11 @@ The explanation should be plain text with proper line breaks. Use \\n for newlin
                             'score': score,
                             'explanation': explanation
                         }
-                    except (json.JSONDecodeError, ValueError, AttributeError):
+                    except (json.JSONDecodeError, ValueError, AttributeError) as parse_error:
+                        # Log the parsing error for debugging
+                        print(f"[AI OPINION] JSON parsing failed: {str(parse_error)}")
+                        print(f"[AI OPINION] Text that failed to parse (first 500 chars): {text[:500]}")
+                        
                         # If JSON parsing fails, try to extract score and use text as explanation
                         # Use same patterns as score-only method for consistency
                         score_patterns = [
@@ -8664,9 +9525,13 @@ The explanation should be plain text with proper line breaks. Use \\n for newlin
                         else:
                             break
             
+            print(f"[AI OPINION] No text content in response")
             return None
             
         except Exception as e:
+            print(f"[AI OPINION] Exception in get_ai_recovery_opinion: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _format_events_for_ai(self, earnings_dividends: Dict) -> str:

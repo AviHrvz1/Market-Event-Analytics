@@ -19,6 +19,10 @@ PRIXE_BASE_URL = 'https://api.prixe.io'
 # Prixe.io API endpoints - if /api/price doesn't work, try /api/historical or check Prixe.io documentation
 PRIXE_PRICE_ENDPOINT = os.getenv('PRIXE_PRICE_ENDPOINT', '/api/price')
 
+# Claude API configuration (for AI opinion feature)
+# API key must be set via environment variable CLAUDE_API_KEY or in .env file
+CLAUDE_API_KEY = os.getenv('CLAUDE_API_KEY', '')
+
 # Performance optimization settings
 MAX_ARTICLES_TO_PROCESS = int(os.getenv('MAX_ARTICLES_TO_PROCESS', '300'))  # Limit total articles processed (increased to 300 to find more articles)
 DEDUPLICATE_BY_COMPANY = os.getenv('DEDUPLICATE_BY_COMPANY', 'false').lower() == 'true'  # Keep only most recent per company (set to false to show all articles)  # Alternative: '/api/historical', '/api/v1/price'
