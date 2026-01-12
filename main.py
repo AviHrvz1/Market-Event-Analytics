@@ -9056,7 +9056,7 @@ Just the number, nothing else."""
             
             # Build comprehensive prompt
             # Claude will search the web to understand why the stock dropped
-            prompt = f"""You are analyzing a stock drop for a vertical call options trading strategy.
+            prompt = f"""You are analyzing a stock drop for a broken-wing butterfly options trading strategy.
 
 STOCK INFORMATION:
 - Ticker: {ticker}
@@ -9080,17 +9080,64 @@ UPCOMING EVENTS:
 {self._format_events_for_ai(stock_data.get('earnings_dividends', {}))}
 
 STRATEGY CONTEXT:
-The trader uses vertical call options and hopes to sell if the stock bounces back up within 40 days. They don't necessarily wait for expiration.
+The trader uses a broken-wing butterfly options strategy after a stock experiences a drop of around 5%. This strategy requires specific characteristics to be effective.
 
-MY TRADING STRATEGY REQUIREMENTS:
-- Stable, liquid ETFs or large-cap stocks
-- Strong, clean trends
-- Predictable behavior
-- No micro-caps, no penny stocks
-- No unprofitable biotech or speculative companies
-- No inverse ETFs, no volatility ETFs, no decay products
-- No leveraged inverse products
-- Optional: Leveraged long ETFs only if trend-friendly
+MY TRADING STRATEGY REQUIREMENTS (Broken-Wing Butterfly with 30-40 DTE):
+You are evaluating stocks for bullish Broken Wing Butterfly (BWB) strategies with 30–40 DTE that rely on:
+- Mean reversion after pullbacks
+- Stable price behavior
+- Liquid option chains
+- Early exits (20–35% profit)
+
+Ideal candidates must have:
+- Very high options liquidity (tight spreads, high open interest, high daily volume)
+- Frequent 3–5% moves with a tendency to stabilize or mean-revert afterward
+- Moderate to high implied volatility, especially after a drop
+- Deep option chains with many strikes, weekly expirations, and small strike increments
+- Large-cap or highly traded stocks with predictable behavior and strong institutional participation
+
+BWB SUITABILITY SCORING RULES:
+Score 9–10 (Excellent):
+- Large or mega-cap
+- Very liquid options
+- Mean-reverting behavior
+- Business-driven price action
+- No binary or overnight event risk
+
+Score 6–8 (Acceptable):
+- Generally stable but with some macro or sector sensitivity
+- Requires caution (prefer 40 DTE)
+
+Score 4–5 (Weak):
+- Trend-prone or macro-driven
+- Inconsistent mean reversion
+
+Score 1–3 (Avoid):
+- Biotechnology or FDA-driven
+- Airlines, shipping, logistics
+- Commodity-based (energy, materials)
+- High gap or event risk
+
+INDUSTRY BIAS:
+Favor (higher scores):
+- Information Technology
+- Communication Services
+- Consumer Discretionary (mega-caps)
+- Pharmaceuticals
+- Health Care Equipment & Services
+- Life Sciences Tools & Services
+- Industrial Conglomerates
+- Machinery
+- Electrical Equipment
+- Professional & Commercial Services
+
+Penalize (lower scores):
+- Biotechnology
+- Airlines & Transportation
+- Energy
+- Materials
+- Utilities
+- Real Estate
 
 TASK:
 1. IMPORTANT: Search the web to find specific news about why {ticker} ({company_name}) dropped {stock_data['pct_drop']:.2f}% on {bearish_date_formatted} ({stock_data['bearish_date']}). 
@@ -9110,26 +9157,51 @@ TASK:
    - RSI-like patterns (overbought/oversold conditions)
    - Historical recovery patterns
 
-3. Evaluate whether this ticker fits my trading strategy:
-   IMPORTANT: Apply the strategy requirements STRICTLY. If the ticker violates ANY of the "no" requirements, it does NOT fit.
+3. Evaluate whether this ticker fits my broken-wing butterfly options strategy:
+   IMPORTANT: Evaluate based on the broken-wing butterfly strategy requirements and BWB Suitability Scoring Rules above. Consider all factors below.
    
-   - Provide a strategy fit score (1-10) for how well it fits my strategy:
-     * 1-3: Does NOT fit (violates key requirements)
-     * 4-6: Partially fits (meets some but not all requirements)
-     * 7-10: Fits well (meets most/all requirements)
+   - Provide a strategy fit score (1-10) using the BWB Suitability Scoring Rules:
+     * 9-10: Excellent (large/mega-cap, very liquid options, mean-reverting, business-driven, no binary risk)
+     * 6-8: Acceptable (generally stable but some macro/sector sensitivity - prefer 40 DTE)
+     * 4-5: Weak (trend-prone or macro-driven, inconsistent mean reversion)
+     * 1-3: Avoid (biotech/FDA-driven, airlines/shipping/logistics, commodity-based, high gap/event risk)
    
-   - Provide a short explanation (2-4 sentences) on strategy fit
+   IMPORTANT: Apply industry bias when scoring:
+   - Favor: Information Technology, Communication Services, Consumer Discretionary (mega-caps), Pharmaceuticals, Health Care Equipment & Services, Life Sciences Tools & Services, Industrial Conglomerates, Machinery, Electrical Equipment, Professional & Commercial Services
+   - Penalize: Biotechnology, Airlines & Transportation, Energy, Materials, Utilities, Real Estate
    
-   - Provide a clear Yes/No on whether it fits:
-     * "Yes" ONLY if it meets all the positive requirements AND does not violate any "no" requirements
-     * "No" if it violates ANY "no" requirement (e.g., unprofitable biotech, micro-cap, penny stock, inverse ETF, etc.)
-     * Do NOT use "Partially" - use only "Yes" or "No"
+   - Provide a short explanation (2-4 sentences) of the score
    
-   - List the key reasons why (volatility, market cap, sector, decay risk, trend quality, profitability, etc.):
-     * Be specific about which requirements it meets or violates
-     * If it's a biotech, clearly state if it's profitable or unprofitable
-     * If it's small-cap, state the market cap and whether it qualifies as large-cap
-     * If it's an ETF, state the type (inverse, leveraged, volatility, etc.)
+   - Liquidity Assessment: Evaluate options liquidity:
+     * Tight spreads (narrow bid-ask spreads)
+     * High open interest (active options trading)
+     * High daily volume (liquid options market)
+     * Assess whether liquidity is sufficient for broken-wing butterfly execution
+   
+   - IV Behavior Assessment: Evaluate implied volatility:
+     * Current IV level (low/moderate/high)
+     * IV behavior after drops (does IV spike appropriately?)
+     * IV rank/percentile if available
+     * Whether IV is suitable for the strategy
+   
+   - Mean-Reversion Tendencies: Analyze price behavior:
+     * Frequency of 3-5% moves
+     * Tendency to stabilize or mean-revert after drops
+     * Historical patterns of recovery after similar drops
+     * Whether price action shows mean-reverting characteristics
+   
+   - Red Flags: Identify any concerns:
+     * Upcoming earnings (timing relative to the drop)
+     * Significant news events
+     * Volatility spikes (unusual or excessive)
+     * Low float (limited shares available)
+     * Low trading volume
+     * Any other factors that could impact the strategy
+   
+   - Suitability: Provide a clear Yes/No on whether this ticker is suitable for a broken-wing butterfly after a 5% drop:
+     * "Yes" if it meets the key requirements and has no major red flags
+     * "No" if it lacks critical requirements or has significant red flags
+     * Be specific about why it is or isn't suitable
 
 4. Based on your research and analysis, provide:
    - A recovery probability score (1-10):
@@ -9145,7 +9217,7 @@ CRITICAL: Respond ONLY with valid JSON. Do not include any text before or after 
 Respond in this exact JSON format (no additional text, no markdown, just pure JSON):
 {{
   "score": <recovery probability score 1-10>,
-  "explanation": "<structured explanation with the following sections:\\n\\n1. STRATEGY FIT EVALUATION:\\n   - Strategy Fit Score: <1-10>\\n   - Short Explanation: <2-4 sentences explaining how well it fits the strategy>\\n   - Fits Strategy: <Yes or No - MUST be exactly 'Yes' or 'No', not 'Partially'>\\n   - Key Reasons: <Specific reasons why it fits or doesn't fit, including:\\n     * Market cap (large-cap vs small-cap/micro-cap)\\n     * Volatility level\\n     * Sector (and if biotech, whether profitable or unprofitable)\\n     * Trend quality (strong/clean vs weak/choppy)\\n     * Decay risk (for ETFs)\\n     * Profitability status\\n     * Any violations of 'no' requirements>\\n\\n2. RECOVERY SCORE EXPLANATION:\\n   - Why this recovery score: <explanation of why you gave this specific recovery score>\\n   - Will it recover: <Yes/No and brief reasoning>\\n\\n3. REASON FOR THE FALL:\\n   - <Brief explanation of why the stock fell, based on web search results>"
+  "explanation": "<structured explanation with the following sections:\\n\\n1. STRATEGY FIT EVALUATION:\\n   - Strategy Fit Score: <1-10 using scale: 1-3 poor fit, 4-6 moderate fit, 7-8 good fit, 9-10 excellent fit>\\n   - Short Explanation: <2-4 sentences explaining the score>\\n   - Liquidity Assessment: <Evaluation of options liquidity including spreads, open interest, daily volume, and whether liquidity is sufficient for broken-wing butterfly>\\n   - IV Behavior Assessment: <Evaluation of implied volatility including current level, behavior after drops, IV rank if available, and suitability for strategy>\\n   - Mean-Reversion Tendencies: <Analysis of price behavior including frequency of 3-5% moves, tendency to stabilize/mean-revert, historical recovery patterns, and mean-reverting characteristics>\\n   - Red Flags: <Any concerns including upcoming earnings, significant news, volatility spikes, low float, low trading volume, or other factors that could impact the strategy>\\n   - Suitable for Broken-Wing Butterfly: <Yes or No - clear answer on whether this ticker is suitable for a broken-wing butterfly after a 5% drop, with specific reasoning>\\n\\n2. RECOVERY SCORE EXPLANATION:\\n   - Why this recovery score: <explanation of why you gave this specific recovery score>\\n   - Will it recover: <Yes/No and brief reasoning>\\n\\n3. REASON FOR THE FALL:\\n   - <Brief explanation of why the stock fell, based on web search results>"
 }}
 
 The explanation should be plain text with proper line breaks. Use \\n for newlines within the JSON string. Do not include the JSON structure as part of the explanation text itself."""

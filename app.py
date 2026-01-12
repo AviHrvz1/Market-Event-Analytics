@@ -3,9 +3,26 @@
 Flask Web Application for Layoff Tracker
 """
 
+import os
+# Set SSL environment variables BEFORE importing yfinance (must be done early)
+os.environ['CURL_CA_BUNDLE'] = ''
+os.environ['REQUESTS_CA_BUNDLE'] = ''
+os.environ['SSL_CERT_FILE'] = ''
+# Try to disable SSL verification at the curl level
+os.environ['CURLOPT_SSL_VERIFYPEER'] = '0'
+os.environ['CURLOPT_SSL_VERIFYHOST'] = '0'
+
 from flask import Flask, render_template, jsonify, Response, stream_with_context, request
 from main import LayoffTracker
 from datetime import datetime, timezone, timedelta
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    # Fallback for Python < 3.9
+    try:
+        from backports.zoneinfo import ZoneInfo
+    except ImportError:
+        ZoneInfo = None
 import sys
 import io
 import json
@@ -14,6 +31,54 @@ import copy
 from contextlib import redirect_stdout, redirect_stderr
 from threading import Lock, Thread
 import queue
+
+# Import yfinance for fallback data
+try:
+    import yfinance as yf
+    import yfinance.data as yf_data
+    YFINANCE_AVAILABLE = True
+    
+    # Patch yfinance to disable SSL verification
+    try:
+        # Patch the _get_cookie_and_crumb_basic method which makes requests
+        if hasattr(yf_data, 'YfData'):
+            original_get = yf_data.YfData.get
+            def patched_get(self, *args, **kwargs):
+                # Try to pass verify=False if the underlying library supports it
+                kwargs['verify'] = False
+                try:
+                    return original_get(self, *args, **kwargs)
+                except TypeError:
+                    # If verify is not supported, try without it
+                    kwargs.pop('verify', None)
+                    return original_get(self, *args, **kwargs)
+            yf_data.YfData.get = patched_get
+            
+            # Also patch get_raw_json
+            if hasattr(yf_data.YfData, 'get_raw_json'):
+                original_get_raw_json = yf_data.YfData.get_raw_json
+                def patched_get_raw_json(self, *args, **kwargs):
+                    kwargs['verify'] = False
+                    try:
+                        return original_get_raw_json(self, *args, **kwargs)
+                    except TypeError:
+                        kwargs.pop('verify', None)
+                        return original_get_raw_json(self, *args, **kwargs)
+                yf_data.YfData.get_raw_json = patched_get_raw_json
+    except Exception as patch_error:
+        # If patching fails, try to patch curl_cffi directly
+        try:
+            import curl_cffi.requests as curl_requests
+            # Patch curl_cffi Session to use verify=False by default
+            original_request = curl_requests.Session.request
+            def patched_request(self, *args, **kwargs):
+                kwargs['verify'] = False
+                return original_request(self, *args, **kwargs)
+            curl_requests.Session.request = patched_request
+        except:
+            pass  # If all patching fails, continue anyway
+except ImportError:
+    YFINANCE_AVAILABLE = False
 
 app = Flask(__name__)
 
@@ -1402,6 +1467,540 @@ def get_stock_events():
             'error': f'Error fetching events: {str(e)}'
         }), 500
 
+def _utc_to_israel_time(utc_dt):
+    """Convert UTC datetime to Israel time (IST/IDT)"""
+    if ZoneInfo:
+        # Use proper timezone handling if available
+        israel_tz = ZoneInfo('Asia/Jerusalem')
+        return utc_dt.astimezone(israel_tz)
+    else:
+        # Fallback: simple offset (not perfect but better than nothing)
+        # DST in Israel: Last Sunday in March to last Sunday in October (roughly April-October)
+        is_israel_dst = 4 <= utc_dt.month <= 10
+        israel_offset_hours = 3 if is_israel_dst else 2
+        return utc_dt + timedelta(hours=israel_offset_hours)
+
+@app.route('/api/vwap-chart-data')
+def get_vwap_chart_data():
+    """API endpoint to fetch intraday data and calculate candles with VWAP for chart display
+    
+    Query parameters:
+    - ticker: Stock ticker symbol (required)
+    - bearish_date: Date in YYYY-MM-DD format (required)
+    - interval: Candle interval - one of: 5m, 15m, 30m, 1h, 1d (default: 15m)
+               Uses Prixe.io data directly - no aggregation on our side
+    """
+    try:
+        ticker = request.args.get('ticker')
+        bearish_date_str = request.args.get('bearish_date')
+        interval_param = request.args.get('interval', '15m').lower()
+        
+        if not ticker or not bearish_date_str:
+            return jsonify({'error': 'Missing required parameters: ticker, bearish_date'}), 400
+        
+        # Validate and map interval to Prixe.io format
+        # Prixe.io supports: 5m, 15m, 30m, 1h, 1d
+        valid_intervals = {
+            '5m': '5m',
+            '15m': '15m',
+            '30m': '30m',
+            '1h': '1h',
+            '1d': '1d'
+        }
+        
+        if interval_param not in valid_intervals:
+            return jsonify({
+                'success': False,
+                'error': f'Invalid interval. Must be one of: {", ".join(valid_intervals.keys())}'
+            }), 400
+        
+        prixe_interval = valid_intervals[interval_param]
+        
+        # Parse bearish_date
+        try:
+            bearish_date = datetime.strptime(bearish_date_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+        except ValueError as e:
+            return jsonify({'error': f'Invalid date format: {str(e)}'}), 400
+        
+        # Check if bearish_date is today
+        now_utc = datetime.now(timezone.utc)
+        is_today = bearish_date.date() == now_utc.date()
+        
+        print(f"[VWAP API DEBUG] bearish_date={bearish_date_str}, is_today={is_today}, now_utc.date()={now_utc.date()}")
+        
+        # Fetch intraday data for bearish_date only
+        tracker = LayoffTracker()
+        
+        # Initialize warning variable (will be set if data is missing)
+        missing_data_warning = None
+        
+        # Calculate market open time for bearish_date
+        market_open_utc = tracker._get_market_open_time(bearish_date, ticker)
+        if not market_open_utc:
+            return jsonify({
+                'success': False,
+                'error': 'Could not determine market open time'
+            }), 400
+        
+        # Calculate market close time for bearish_date
+        market_close_utc = tracker._get_market_close_time(bearish_date, ticker)
+        
+        if is_today:
+            print(f"[VWAP API DEBUG] Using TODAY path")
+            # If today, show full trading day from market open to current time (or market close if after hours)
+            start_time_utc = market_open_utc  # 9:30 AM ET
+            end_time_utc = min(now_utc, market_close_utc) if market_close_utc else now_utc
+            
+            # Fetch intraday data for bearish_date only
+            bearish_date_only = bearish_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            # Request data at the specified interval directly from Prixe.io (no aggregation)
+            intraday_data = tracker._fetch_intraday_data_for_day(ticker, bearish_date_only, interval=prixe_interval)
+            
+            if not intraday_data or not intraday_data.get('success') or 'data' not in intraday_data:
+                return jsonify({
+                    'success': False,
+                    'error': 'No intraday data available for the specified date'
+                }), 200
+            
+            data = intraday_data['data']
+            timestamps = data.get('timestamp', [])
+            opens = data.get('open', [])
+            highs = data.get('high', [])
+            lows = data.get('low', [])
+            closes = data.get('close', [])
+            volumes = data.get('volume', [])
+            
+            if not timestamps:
+                return jsonify({
+                    'success': False,
+                    'error': 'No intraday data available for the specified date'
+                }), 200
+            
+            # Filter data to the time window
+            start_timestamp = int(start_time_utc.timestamp())
+            end_timestamp = int(end_time_utc.timestamp())
+            
+            filtered_data = []
+            for i, ts in enumerate(timestamps):
+                if start_timestamp <= ts <= end_timestamp:
+                    filtered_data.append({
+                        'timestamp': ts,
+                        'open': opens[i] if i < len(opens) else None,
+                        'high': highs[i] if i < len(highs) else None,
+                        'low': lows[i] if i < len(lows) else None,
+                        'close': closes[i] if i < len(closes) else None,
+                        'volume': volumes[i] if i < len(volumes) else 0
+                    })
+            
+            if not filtered_data:
+                return jsonify({
+                    'success': False,
+                    'error': 'No data available in the specified time range'
+                }), 200
+        else:
+            print(f"[VWAP API DEBUG] Using PAST DATE path - full trading day of {bearish_date_str} + full trading day of next day")
+            # For past dates: show full trading day of bearish_date + full trading day of next trading day (only trading hours)
+            if not market_close_utc:
+                return jsonify({
+                    'success': False,
+                    'error': 'Could not determine market close time'
+                }), 400
+            
+            # Start from beginning of bearish_date (market open, e.g., 9:30 AM ET)
+            start_time_utc = market_open_utc
+            print(f"[VWAP API DEBUG] market_open_utc: {market_open_utc}, market_close_utc: {market_close_utc}, start_time_utc: {start_time_utc}, timestamp: {int(start_time_utc.timestamp())}")
+            
+            # Get next trading day
+            next_trading_day = tracker.get_next_trading_day(bearish_date, ticker)
+            print(f"[VWAP API DEBUG] next_trading_day: {next_trading_day}")
+            if not next_trading_day:
+                return jsonify({
+                    'success': False,
+                    'error': 'Could not determine next trading day'
+                }), 400
+            
+            # Get market open and close for next trading day
+            next_market_open_utc = tracker._get_market_open_time(next_trading_day, ticker)
+            next_market_close_utc = tracker._get_market_close_time(next_trading_day, ticker)
+            print(f"[VWAP API DEBUG] next_market_open_utc: {next_market_open_utc}, next_market_close_utc: {next_market_close_utc}")
+            if not next_market_open_utc or not next_market_close_utc:
+                return jsonify({
+                    'success': False,
+                    'error': 'Could not determine next trading day market hours'
+                }), 400
+            
+            # End at market close of next trading day (e.g., 4:00 PM ET)
+            end_time_utc = next_market_close_utc
+            print(f"[VWAP API DEBUG] end_time_utc: {end_time_utc}, timestamp: {int(end_time_utc.timestamp())}")
+            
+            # Fetch intraday data for both bearish_date and next trading day
+            bearish_date_only = bearish_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            # Ensure next_trading_day has timezone info before using replace
+            if next_trading_day.tzinfo is None:
+                next_trading_day = next_trading_day.replace(tzinfo=timezone.utc)
+            next_trading_day_only = next_trading_day.replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            # Fetch data for bearish_date at specified interval (no fallback - use Prixe.io data directly)
+            intraday_data_day1 = tracker._fetch_intraday_data_for_day(ticker, bearish_date_only, interval=prixe_interval)
+            
+            # Fetch data for next trading day at same interval
+            intraday_data_day2 = tracker._fetch_intraday_data_for_day(ticker, next_trading_day_only, interval=prixe_interval)
+            
+            # Combine data from both days
+            all_timestamps = []
+            all_opens = []
+            all_highs = []
+            all_lows = []
+            all_closes = []
+            all_volumes = []
+            
+            # Initialize warning variable (will be set if data is missing)
+            missing_data_warning = None
+            
+            if intraday_data_day1 and intraday_data_day1.get('success') and 'data' in intraday_data_day1:
+                data1 = intraday_data_day1['data']
+                all_timestamps.extend(data1.get('timestamp', []))
+                all_opens.extend(data1.get('open', []))
+                all_highs.extend(data1.get('high', []))
+                all_lows.extend(data1.get('low', []))
+                all_closes.extend(data1.get('close', []))
+                all_volumes.extend(data1.get('volume', []))
+            
+            if intraday_data_day2 and intraday_data_day2.get('success') and 'data' in intraday_data_day2:
+                data2 = intraday_data_day2['data']
+                all_timestamps.extend(data2.get('timestamp', []))
+                all_opens.extend(data2.get('open', []))
+                all_highs.extend(data2.get('high', []))
+                all_lows.extend(data2.get('low', []))
+                all_closes.extend(data2.get('close', []))
+                all_volumes.extend(data2.get('volume', []))
+            
+            if not all_timestamps:
+                return jsonify({
+                    'success': False,
+                    'error': 'No intraday data available for the specified dates'
+                }), 200
+            
+            # Filter data to the time window (full trading day of day 1 + first 3 hours of day 2)
+            start_timestamp = int(start_time_utc.timestamp())
+            end_timestamp = int(end_time_utc.timestamp())
+            
+            # Debug: Check data before filtering
+            day1_count_before = sum(1 for ts in all_timestamps 
+                                   if datetime.fromtimestamp(ts, tz=timezone.utc).date() == bearish_date.date())
+            day2_count_before = sum(1 for ts in all_timestamps 
+                                   if datetime.fromtimestamp(ts, tz=timezone.utc).date() == next_trading_day.date())
+            print(f"[VWAP DEBUG] Before filtering: {len(all_timestamps)} total, {day1_count_before} from {bearish_date_str}, {day2_count_before} from {next_trading_day.date()}")
+            
+            # Debug: Show first and last timestamps in raw data
+            if all_timestamps:
+                first_ts_raw = min(all_timestamps)
+                last_ts_raw = max(all_timestamps)
+                first_dt_raw = datetime.fromtimestamp(first_ts_raw, tz=timezone.utc)
+                last_dt_raw = datetime.fromtimestamp(last_ts_raw, tz=timezone.utc)
+                print(f"[VWAP DEBUG] Raw data range: first={first_dt_raw} UTC (timestamp: {first_ts_raw}), last={last_dt_raw} UTC (timestamp: {last_ts_raw})")
+                print(f"[VWAP DEBUG] Expected range: start={start_time_utc} UTC (timestamp: {start_timestamp}), end={end_time_utc} UTC (timestamp: {end_timestamp})")
+                
+                # Check if we're missing data from market open
+                missing_data_warning = None
+                if first_ts_raw > start_timestamp:
+                    missing_seconds = first_ts_raw - start_timestamp
+                    missing_minutes = missing_seconds / 60
+                    print(f"[VWAP WARNING] ⚠️  Missing {missing_minutes:.0f} minutes ({missing_seconds} seconds) of data from market open!")
+                    print(f"[VWAP WARNING]    Expected start: {start_time_utc} UTC")
+                    print(f"[VWAP WARNING]    Actual first data point: {first_dt_raw} UTC")
+                    
+                    # Try to fetch missing data from yfinance
+                    print(f"[VWAP FALLBACK DEBUG] YFINANCE_AVAILABLE={YFINANCE_AVAILABLE}, missing_minutes={missing_minutes:.0f}")
+                    print(f"[VWAP FALLBACK DEBUG] Condition check: YFINANCE_AVAILABLE={YFINANCE_AVAILABLE}, missing_minutes > 30 = {missing_minutes > 30}")
+                    if YFINANCE_AVAILABLE and missing_minutes > 30:  # Only try if missing more than 30 minutes
+                        print(f"[VWAP FALLBACK] ✅ Condition met! Attempting to fetch missing data from yfinance...")
+                        print(f"[VWAP FALLBACK] Ticker: {ticker}, Bearish date: {bearish_date_str}")
+                        try:
+                            # yfinance needs date strings
+                            date_str = bearish_date.strftime('%Y-%m-%d')
+                            next_date_str = (bearish_date + timedelta(days=1)).strftime('%Y-%m-%d')
+                            print(f"[VWAP FALLBACK] Fetching yfinance data: {ticker} from {date_str} to {next_date_str}, interval=1m")
+                            
+                            # Download 1-minute data for the day
+                            yf_data = yf.download(
+                                ticker,
+                                start=date_str,
+                                end=next_date_str,
+                                interval='1m',
+                                progress=False,
+                                auto_adjust=False
+                            )
+                            print(f"[VWAP FALLBACK] yfinance download completed. Data empty: {yf_data.empty}, Shape: {yf_data.shape if not yf_data.empty else 'N/A'}")
+                            
+                            if not yf_data.empty:
+                                # Convert to UTC timestamps and filter to missing range
+                                yf_timestamps = []
+                                yf_opens = []
+                                yf_highs = []
+                                yf_lows = []
+                                yf_closes = []
+                                yf_volumes = []
+                                
+                                for idx, row in yf_data.iterrows():
+                                    # Convert pandas timestamp to UTC
+                                    try:
+                                        import pytz
+                                        if idx.tz is None:
+                                            # Assume ET timezone if not set
+                                            et_tz = pytz.timezone('America/New_York')
+                                            idx_et = et_tz.localize(idx)
+                                            idx_utc = idx_et.astimezone(timezone.utc)
+                                        else:
+                                            idx_utc = idx.tz_convert('UTC')
+                                        
+                                        ts_utc = int(idx_utc.timestamp())
+                                    except Exception as e:
+                                        print(f"[VWAP FALLBACK] Error processing yfinance row: {e}")
+                                        continue
+                                    
+                                    # Only include data in the missing range
+                                    if start_timestamp <= ts_utc < first_ts_raw:
+                                        yf_timestamps.append(ts_utc)
+                                        yf_opens.append(float(row['Open']))
+                                        yf_highs.append(float(row['High']))
+                                        yf_lows.append(float(row['Low']))
+                                        yf_closes.append(float(row['Close']))
+                                        yf_volumes.append(int(row['Volume']) if 'Volume' in row else 0)
+                                
+                                if yf_timestamps:
+                                    print(f"[VWAP FALLBACK] ✅ Fetched {len(yf_timestamps)} data points from yfinance for missing period")
+                                    # Prepend yfinance data to the arrays
+                                    all_timestamps = yf_timestamps + all_timestamps
+                                    all_opens = yf_opens + all_opens
+                                    all_highs = yf_highs + all_highs
+                                    all_lows = yf_lows + all_lows
+                                    all_closes = yf_closes + all_closes
+                                    all_volumes = yf_volumes + all_volumes
+                                    
+                                    # Update first timestamp
+                                    first_ts_raw = min(all_timestamps)
+                                    first_dt_raw = datetime.fromtimestamp(first_ts_raw, tz=timezone.utc)
+                                    
+                                    if first_ts_raw <= start_timestamp:
+                                        print(f"[VWAP FALLBACK] ✅ Successfully filled missing data! Data now starts at {first_dt_raw} UTC")
+                                    else:
+                                        missing_data_warning = f"Missing {missing_minutes:.0f} minutes from market open (yfinance fallback partially filled)"
+                                        print(f"[VWAP FALLBACK] ⚠️  Partially filled - still missing some data")
+                                else:
+                                    print(f"[VWAP FALLBACK] ❌ yfinance data available but not in missing time range")
+                                    missing_data_warning = f"Missing {missing_minutes:.0f} minutes from market open (yfinance fallback unavailable)"
+                            else:
+                                print(f"[VWAP FALLBACK] ❌ No yfinance data available")
+                                missing_data_warning = f"Missing {missing_minutes:.0f} minutes from market open (yfinance fallback unavailable)"
+                        except Exception as e:
+                            print(f"[VWAP FALLBACK] ❌ Error fetching from yfinance: {e}")
+                            missing_data_warning = f"Missing {missing_minutes:.0f} minutes from market open (yfinance fallback failed: {str(e)})"
+                    else:
+                        missing_data_warning = f"Missing {missing_minutes:.0f} minutes from market open"
+                else:
+                    print(f"[VWAP DEBUG] ✅ Data starts at or before market open")
+            
+            filtered_data = []
+            for i, ts in enumerate(all_timestamps):
+                ts_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                ts_date = ts_dt.date()
+                
+                # Check if timestamp is within the overall range
+                if start_timestamp <= ts <= end_timestamp:
+                    # Also check if timestamp is during market hours for that day
+                    is_valid_trading_hour = False
+                    
+                    if ts_date == bearish_date.date():
+                        # For bearish_date: include full trading hours (9:30 AM - 4:00 PM ET)
+                        if market_open_utc.timestamp() <= ts <= market_close_utc.timestamp():
+                            is_valid_trading_hour = True
+                    elif ts_date == next_trading_day.date():
+                        # For next trading day: include full trading hours (9:30 AM - 4:00 PM ET)
+                        if next_market_open_utc.timestamp() <= ts <= next_market_close_utc.timestamp():
+                            is_valid_trading_hour = True
+                    
+                    if is_valid_trading_hour:
+                        filtered_data.append({
+                            'timestamp': ts,
+                            'open': all_opens[i] if i < len(all_opens) else None,
+                            'high': all_highs[i] if i < len(all_highs) else None,
+                            'low': all_lows[i] if i < len(all_lows) else None,
+                            'close': all_closes[i] if i < len(all_closes) else None,
+                            'volume': all_volumes[i] if i < len(all_volumes) else 0
+                        })
+            
+            # Debug: Check data after filtering
+            day1_count_after = sum(1 for d in filtered_data 
+                                  if datetime.fromtimestamp(d['timestamp'], tz=timezone.utc).date() == bearish_date.date())
+            day2_count_after = sum(1 for d in filtered_data 
+                                  if datetime.fromtimestamp(d['timestamp'], tz=timezone.utc).date() == next_trading_day.date())
+            print(f"[VWAP DEBUG] After filtering: {len(filtered_data)} total, {day1_count_after} from {bearish_date_str}, {day2_count_after} from {next_trading_day.date()}")
+            
+            if not filtered_data:
+                return jsonify({
+                    'success': False,
+                    'error': 'No data available in the specified time range'
+                }), 200
+        
+        # Sort filtered data by timestamp
+        filtered_data.sort(key=lambda x: x['timestamp'])
+        
+        # Debug: Check filtered data dates
+        filtered_dates = set()
+        for d in filtered_data:
+            dt = datetime.fromtimestamp(d['timestamp'], tz=timezone.utc)
+            filtered_dates.add(dt.date())
+        print(f"[VWAP DEBUG] Filtered data dates: {sorted(filtered_dates)}")
+        print(f"[VWAP DEBUG] Using Prixe.io interval: {prixe_interval}")
+        
+        # Initialize arrays for candles
+        candles_15min = []
+        vwap_points = []
+        time_labels = []
+        
+        cumulative_price_volume = 0
+        cumulative_volume = 0
+        current_trading_day = None  # Track current trading day for VWAP reset
+        
+        # Use Prixe.io data directly - no aggregation
+        # Prixe.io already provides candles at the requested interval
+        print(f"[VWAP DEBUG] Using Prixe.io data directly at {prixe_interval} interval - no aggregation")
+        
+        # Map interval to minutes for time label formatting
+        interval_to_minutes = {
+            '5m': 5,
+            '15m': 15,
+            '30m': 30,
+            '1h': 60,
+            '1d': 1440  # Daily
+        }
+        interval_minutes = interval_to_minutes.get(prixe_interval, 15)
+        
+        # Process each data point from Prixe.io as a candle
+        for data_point in filtered_data:
+            close = data_point.get('close')
+            if close is None:
+                continue
+            
+            # Get timestamp and check if we've moved to a new trading day
+            ts = data_point['timestamp']
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            candle_date = dt.date()
+            
+            # Reset VWAP calculation at the start of each new trading day
+            if current_trading_day is None or candle_date != current_trading_day:
+                # Reset VWAP for the new trading day
+                cumulative_price_volume = 0
+                cumulative_volume = 0
+                current_trading_day = candle_date
+                print(f"[VWAP DEBUG] Resetting VWAP for new trading day: {candle_date}")
+            
+            # Use OHLC from Prixe.io if available, otherwise calculate from close
+            candle_open = data_point.get('open') or close
+            candle_high = data_point.get('high') or close
+            candle_low = data_point.get('low') or close
+            candle_close = close
+            candle_volume = data_point.get('volume', 0)
+            
+            # Calculate VWAP (resets each trading day)
+            typical_price = (candle_high + candle_low + candle_close) / 3
+            if candle_volume > 0:
+                cumulative_price_volume += typical_price * candle_volume
+                cumulative_volume += candle_volume
+                candle_vwap = cumulative_price_volume / cumulative_volume if cumulative_volume > 0 else typical_price
+            else:
+                candle_vwap = typical_price
+            
+            # Format time label based on interval
+            israel_dt = _utc_to_israel_time(dt)
+            month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+            month = month_names[israel_dt.month - 1]
+            day = israel_dt.day
+            hour = israel_dt.hour
+            minute_val = israel_dt.minute
+            
+            if prixe_interval == '1h':
+                time_label = f"{month} {day} {hour:02d}:00"
+            elif prixe_interval == '30m':
+                minute_display = 0 if minute_val < 30 else 30
+                time_label = f"{month} {day} {hour:02d}:{minute_display:02d}"
+            elif prixe_interval == '1d':
+                time_label = f"{month} {day}"
+            else:
+                # 5m, 15m - show full time
+                time_label = f"{month} {day} {hour:02d}:{minute_val:02d}"
+            
+            candles_15min.append({
+                'timestamp': ts,
+                'open': candle_open,
+                'high': candle_high,
+                'low': candle_low,
+                'close': candle_close,
+                'volume': candle_volume
+            })
+            vwap_points.append(candle_vwap)
+            time_labels.append(time_label)
+        
+        # Calculate overall VWAP
+        if cumulative_volume > 0:
+            overall_vwap = cumulative_price_volume / cumulative_volume
+        else:
+            # Fallback: average of all closes
+            overall_vwap = sum(c['close'] for c in candles_15min) / len(candles_15min) if candles_15min else 0
+        
+        # Debug: Check final candles
+        print(f"[VWAP DEBUG] Processed {len(filtered_data)} data points into {len(candles_15min)} candles")
+        if candles_15min:
+            first_candle_dt = datetime.fromtimestamp(candles_15min[0]['timestamp'], tz=timezone.utc)
+            last_candle_dt = datetime.fromtimestamp(candles_15min[-1]['timestamp'], tz=timezone.utc)
+            unique_candle_dates = set()
+            for c in candles_15min:
+                dt = datetime.fromtimestamp(c['timestamp'], tz=timezone.utc)
+                unique_candle_dates.add(dt.date())
+            print(f"[VWAP DEBUG] Final candles: {len(candles_15min)} candles, dates: {sorted(unique_candle_dates)}, first: {first_candle_dt}, last: {last_candle_dt}")
+        
+        # Add debug info to response (only if candles exist)
+        debug_info = None
+        if candles_15min:
+            try:
+                debug_info = {
+                    'is_today': is_today,
+                    'bearish_date': bearish_date_str,
+                    'first_candle_timestamp': candles_15min[0]['timestamp'],
+                    'last_candle_timestamp': candles_15min[-1]['timestamp'],
+                    'candle_count': len(candles_15min)
+                }
+            except:
+                pass
+        
+        response_data = {
+            'success': True,
+            'candles': candles_15min,
+            'vwap': overall_vwap,
+            'vwap_points': vwap_points,
+            'time_labels': time_labels
+        }
+        if debug_info:
+            response_data['debug_info'] = debug_info
+        
+        # Add warning if data is incomplete (check if missing_data_warning was set)
+        # Note: missing_data_warning is set in the past date path, need to check if it exists
+        if 'missing_data_warning' in locals() and missing_data_warning:
+            response_data['warning'] = missing_data_warning
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[VWAP CHART DATA API ERROR] {error_trace}")
+        return jsonify({
+            'success': False,
+            'error': f'Error fetching VWAP chart data: {str(e)}'
+        }), 500
+
 @app.route('/api/ai-opinion', methods=['POST'])
 def get_ai_opinion():
     """Unified API endpoint to fetch AI recovery analysis (score + explanation) with caching
@@ -1734,6 +2333,13 @@ if __name__ == '__main__':
     print("Server will be available at: http://127.0.0.1:8082")
     print(f"Server output is being logged to: {SERVER_LOG_FILE}")
     print("=" * 60)
+    
+    # Debug: Print all registered routes
+    print("\nRegistered routes:")
+    for rule in app.url_map.iter_rules():
+        if '/api' in rule.rule:
+            print(f"  {rule.rule} -> {rule.endpoint} (methods: {rule.methods})")
+    print("=" * 60 + "\n")
     
     try:
         app.run(debug=True, host='127.0.0.1', port=8082, use_reloader=False)
