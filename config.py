@@ -1,4 +1,5 @@
 import os
+import urllib.parse
 from dotenv import load_dotenv
 
 try:
@@ -7,21 +8,74 @@ except PermissionError:
     # Some environments block reading .env (macOS TCC, etc.); rely on defaults/env vars
     pass
 
+# Load keys from secrets.py (gitignored); fallback to env or placeholder if missing
+try:
+    from secrets import (
+        NEWS_API_KEY as _NEWS_API_KEY,
+        PRIXE_API_KEY as _PRIXE_API_KEY,
+        CLAUDE_API_KEY as _CLAUDE_API_KEY,
+        SCHWAB_TOS_API_KEY as _SCHWAB_TOS_API_KEY,
+        SCHWAB_TOS_API_SECRET as _SCHWAB_TOS_API_SECRET,
+    )
+except ImportError:
+    _NEWS_API_KEY = _PRIXE_API_KEY = _CLAUDE_API_KEY = _SCHWAB_TOS_API_KEY = _SCHWAB_TOS_API_SECRET = ''
+
 # News API configuration
-NEWS_API_KEY = os.getenv('NEWS_API_KEY', 'e876bac25bb346a1985dfdc6b582b122')
+NEWS_API_KEY = os.getenv('NEWS_API_KEY') or _NEWS_API_KEY or 'your_newsapi_key'
 NEWS_API_EVERYTHING_URL = 'https://newsapi.org/v2/everything'
 NEWS_API_HEADLINES_URL = 'https://newsapi.org/v2/top-headlines'
 NEWSAPI_MAX_LOOKBACK_DAYS = 30  # NewsAPI historical cap on free/business plans
 
 # Prixe.io Stock Price API configuration
-PRIXE_API_KEY = os.getenv('PRIXE_API_KEY', 'pro_82da3ed00b82b730c5ce36826a555899703a7841ba96dab8fa9b2f094171447e')
+PRIXE_API_KEY = os.getenv('PRIXE_API_KEY') or _PRIXE_API_KEY or 'your_prixe_api_key'
 PRIXE_BASE_URL = 'https://api.prixe.io'
 # Prixe.io API endpoints - if /api/price doesn't work, try /api/historical or check Prixe.io documentation
 PRIXE_PRICE_ENDPOINT = os.getenv('PRIXE_PRICE_ENDPOINT', '/api/price')
 
 # Claude API configuration (for AI opinion feature)
-# API key must be set via environment variable CLAUDE_API_KEY or in .env file
-CLAUDE_API_KEY = os.getenv('CLAUDE_API_KEY', '')
+CLAUDE_API_KEY = os.getenv('CLAUDE_API_KEY') or _CLAUDE_API_KEY or 'sk-ant-api03-YourActualClaudeAPIKeyHere-ReplaceThisWithYourRealKey'
+
+# Schwab (TOS) developer credentials - used for option chain / close-value (Think or Swim).
+# If you see "refresh_token_authentication_error" or "unsupported_token_type", the refresh
+# token has expired. Re-run the OAuth flow and paste the new token in data/schwab_refresh_token.txt
+# (or set SCHWAB_TOS_REFRESH_TOKEN in .env).
+
+# Callback URL registered in your Schwab app (hardcoded so you don't lose it)
+SCHWAB_TOS_CALLBACK_URL = 'https://api.avi-marketdata.xyz/schwab/callback'
+
+# Authorize URL - client_id from secrets so it's not in repo
+_schwab_cid = os.getenv('SCHWAB_TOS_API_KEY') or _SCHWAB_TOS_API_KEY or 'your_schwab_app_key'
+SCHWAB_TOS_AUTHORIZE_URL = (
+    'https://api.schwabapi.com/v1/oauth/authorize'
+    '?client_id=' + urllib.parse.quote(_schwab_cid, safe='')
+    + '&redirect_uri=https%3A%2F%2Fapi.avi-marketdata.xyz%2Fschwab%2Fcallback'
+    '&response_type=code'
+)
+
+SCHWAB_TOS_API_KEY = os.getenv('SCHWAB_TOS_API_KEY') or _SCHWAB_TOS_API_KEY or 'your_schwab_app_key'
+SCHWAB_TOS_API_SECRET = os.getenv('SCHWAB_TOS_API_SECRET') or _SCHWAB_TOS_API_SECRET or 'your_schwab_app_secret'
+SCHWAB_TOS_APP_MACHINE_NAME = os.getenv(
+    'SCHWAB_TOS_APP_MACHINE_NAME',
+    'prod-avihrvzgmailcom-5355aaff-cbc9-4b76-91da-20d16b4b426e'
+)
+
+# Refresh token: from env, or from file data/schwab_refresh_token.txt (paste token there so you don't lose it)
+def _read_schwab_refresh_token_from_file():
+    path = os.path.join(os.path.dirname(__file__), 'data', 'schwab_refresh_token.txt')
+    if os.path.isfile(path):
+        try:
+            with open(path, 'r') as f:
+                line = f.read().strip().splitlines()
+                if line and line[0].strip() and not line[0].strip().startswith('#'):
+                    return line[0].strip()
+        except Exception:
+            pass
+    return None
+
+SCHWAB_TOS_REFRESH_TOKEN = os.getenv('SCHWAB_TOS_REFRESH_TOKEN') or _read_schwab_refresh_token_from_file() or ''
+
+# Schwab heartbeat: run every N hours to keep refresh token active (default 24)
+SCHWAB_HEARTBEAT_INTERVAL_HOURS = float(os.getenv('SCHWAB_HEARTBEAT_INTERVAL_HOURS', '24'))
 
 # Performance optimization settings
 MAX_ARTICLES_TO_PROCESS = int(os.getenv('MAX_ARTICLES_TO_PROCESS', '300'))  # Limit total articles processed (increased to 300 to find more articles)

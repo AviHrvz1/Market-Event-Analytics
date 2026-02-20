@@ -10,6 +10,8 @@ import re
 import urllib.parse
 import sys
 import json
+import csv
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Tuple
 from bs4 import BeautifulSoup
@@ -30,6 +32,930 @@ from config import (
 )
 
 NEWSAPI_MAX_LOOKBACK_DAYS = 30  # NewsAPI free/business tiers limit historical access
+
+
+def _observed_fixed_holiday(date_value: datetime) -> datetime:
+    weekday = date_value.weekday()  # 0=Mon, 5=Sat, 6=Sun
+    if weekday == 5:
+        return date_value - timedelta(days=1)
+    if weekday == 6:
+        return date_value + timedelta(days=1)
+    return date_value
+
+
+def _nth_weekday(year: int, month: int, weekday: int, nth: int) -> datetime:
+    first_day = datetime(year, month, 1)
+    first_weekday = first_day.weekday()
+    offset = (weekday - first_weekday + 7) % 7
+    return first_day + timedelta(days=offset + 7 * (nth - 1))
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> datetime:
+    last_day = datetime(year, month + 1, 1) - timedelta(days=1)
+    last_weekday = last_day.weekday()
+    offset = (last_weekday - weekday + 7) % 7
+    return last_day - timedelta(days=offset)
+
+
+def _easter_sunday(year: int) -> datetime:
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return datetime(year, month, day)
+
+
+def get_us_market_holidays(year: int) -> set:
+    holidays = set()
+
+    def add_holiday(date_value: datetime) -> None:
+        holidays.add(date_value.date())
+
+    add_holiday(_observed_fixed_holiday(datetime(year, 1, 1)))
+    add_holiday(_observed_fixed_holiday(datetime(year, 6, 19)))
+    add_holiday(_observed_fixed_holiday(datetime(year, 7, 4)))
+    add_holiday(_observed_fixed_holiday(datetime(year, 12, 25)))
+
+    add_holiday(_nth_weekday(year, 1, 0, 3))   # MLK Day
+    add_holiday(_nth_weekday(year, 2, 0, 3))   # Presidents' Day
+    add_holiday(_last_weekday(year, 5, 0))     # Memorial Day
+    add_holiday(_nth_weekday(year, 9, 0, 1))   # Labor Day
+    add_holiday(_nth_weekday(year, 11, 3, 4))  # Thanksgiving
+
+    good_friday = _easter_sunday(year) - timedelta(days=2)
+    add_holiday(good_friday)
+
+    return holidays
+
+
+def count_us_trading_days(start_date: datetime, end_date: datetime) -> int:
+    if end_date < start_date:
+        return 0
+    start = start_date.date()
+    end = end_date.date()
+    holidays_cache = {}
+    current = start
+    count = 0
+    while current <= end:
+        year = current.year
+        if year not in holidays_cache:
+            holidays_cache[year] = get_us_market_holidays(year)
+        weekday = current.weekday()
+        is_weekend = weekday >= 5
+        is_holiday = current in holidays_cache[year]
+        if not is_weekend and not is_holiday:
+            count += 1
+        current += timedelta(days=1)
+    return count
+
+
+def parse_positions_analytics(csv_path: str) -> Dict[str, object]:
+    section_found = False
+    header_map = None
+    positions = []
+    active_groups: Dict[str, Dict] = {}
+
+    def parse_amount(value: str) -> Decimal:
+        if value is None:
+            return Decimal('0')
+        cleaned = value.replace(',', '').replace('"', '').strip()
+        if cleaned.startswith('(') and cleaned.endswith(')'):
+            cleaned = '-' + cleaned[1:-1]
+        if cleaned == '':
+            return Decimal('0')
+        try:
+            return Decimal(cleaned)
+        except InvalidOperation:
+            return Decimal('0')
+
+    def parse_qty_from_description(description: str) -> int:
+        if not description:
+            return 0
+        match = re.search(r'\b(BOT|SOLD)\s+([+-]?\d+)\b', description)
+        if not match:
+            return 0
+        action = match.group(1)
+        qty_raw = match.group(2)
+        try:
+            qty = int(qty_raw)
+        except ValueError:
+            return 0
+        if qty_raw.startswith(('+', '-')):
+            return qty
+        return qty if action == 'BOT' else -qty
+
+    def normalize_description(description: str) -> str:
+        if not description:
+            return ''
+        cleaned = re.sub(r'^(BOT|SOLD)\s+[+-]?\d+\s+', '', description).strip()
+        cleaned = re.sub(r'\s+@.+$', '', cleaned).strip()
+        return cleaned
+
+    def extract_ticker(description: str) -> str:
+        if not description:
+            return ''
+        tokens = description.split()
+        try:
+            idx = tokens.index('100')
+            if idx > 0:
+                candidate = tokens[idx - 1]
+                if re.fullmatch(r'[A-Z]{1,5}', candidate):
+                    return candidate
+        except ValueError:
+            pass
+        for token in tokens:
+            if re.fullmatch(r'[A-Z]{1,5}', token):
+                return token
+        return ''
+
+    MONTH_ABBR = {'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04', 'MAY': '05', 'JUN': '06',
+                  'JUL': '07', 'AUG': '08', 'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'}
+
+    def parse_legs_from_description(description: str) -> List[Tuple[str, int]]:
+        """
+        Parse option legs from a trade description. Returns list of (leg_key, quantity).
+        leg_key = "expiry_strike_type" e.g. "06FEB26_114_PUT".
+        Only VERTICAL (2 strikes) and BUTTERFLY (3 strikes, 1x2x1) are supported; others return [].
+        """
+        if not description:
+            return []
+        # Expiry: e.g. "6 FEB 26" or "20 FEB 26"
+        expiry_match = re.search(r'(\d{1,2})\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+(\d{2})\b', description, re.I)
+        if not expiry_match:
+            return []
+        day, month_abbr, year = expiry_match.group(1), expiry_match.group(2).upper(), expiry_match.group(3)
+        expiry_norm = f"{int(day):02d}{month_abbr}{year}"
+
+        # Option type: PUT or CALL (before @)
+        put_call_match = re.search(r'\b(PUT|CALL)\s*@', description, re.I)
+        opt_type = (put_call_match.group(1).upper() if put_call_match else '') or ''
+        if not opt_type:
+            return []
+
+        # Main quantity: BOT +20 or SOLD -10
+        qty = parse_qty_from_description(description)
+        if qty == 0:
+            return []
+
+        # Strikes: two (vertical) or three (butterfly) numbers, e.g. 114/113 or 111/112/113
+        strikes_match = re.search(r'\b(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)(?:/(\d+(?:\.\d+)?))?\s*(?:PUT|CALL)', description)
+        if not strikes_match:
+            return []
+        s1, s2, s3 = strikes_match.group(1), strikes_match.group(2), strikes_match.group(3)
+        try:
+            n1, n2 = float(s1), float(s2)
+        except ValueError:
+            return []
+
+        legs: List[Tuple[str, int]] = []
+
+        if strikes_match.group(3) is not None:
+            # Butterfly: A/B/C -> leg A +qty, leg B -2*qty, leg C +qty (1x2x1)
+            try:
+                n3 = float(s3)
+            except ValueError:
+                return []
+            # Check for ratio butterfly (e.g. 1/4/3) - skip leg parsing, return []
+            if re.search(r'1/4/3|~\s*BUTTERFLY', description, re.I):
+                return []
+            legs.append((f"{expiry_norm}_{s1}_{opt_type}", qty))
+            legs.append((f"{expiry_norm}_{s2}_{opt_type}", -2 * qty))
+            legs.append((f"{expiry_norm}_{s3}_{opt_type}", qty))
+        else:
+            # Vertical: two strikes. Short (SOLD/negative) = sell high, buy low; Long (BOT/positive) = buy low, sell high
+            low_s, high_s = (s1, s2) if n1 <= n2 else (s2, s1)
+            if qty < 0:  # SOLD
+                legs.append((f"{expiry_norm}_{high_s}_{opt_type}", qty))   # sell high
+                legs.append((f"{expiry_norm}_{low_s}_{opt_type}", -qty))   # buy low
+            else:         # BOT
+                legs.append((f"{expiry_norm}_{low_s}_{opt_type}", qty))   # buy low
+                legs.append((f"{expiry_norm}_{high_s}_{opt_type}", -qty))  # sell high
+
+        return legs
+
+    def expiry_norm_to_yyyy_mm_dd(expiry_norm: str) -> str:
+        """Convert e.g. 06FEB26 to 2026-02-06."""
+        if not expiry_norm or len(expiry_norm) < 7:
+            return ''
+        try:
+            day = int(expiry_norm[:2])
+            month_abbr = expiry_norm[2:5].upper()
+            year_two = expiry_norm[5:7]
+            month = MONTH_ABBR.get(month_abbr, '01')
+            year = '20' + year_two if int(year_two) < 50 else '19' + year_two
+            return f"{year}-{month}-{day:02d}"
+        except (ValueError, KeyError):
+            return ''
+
+    def parse_leg_key(leg_key: str) -> tuple:
+        """Parse leg_key e.g. 06FEB26_114_PUT to (expiry_norm, strike_str, put_call)."""
+        parts = leg_key.split('_')
+        if len(parts) < 3:
+            return ('', '', '')
+        expiry_norm = parts[0]
+        strike_str = parts[1]
+        put_call = parts[2].upper() if len(parts) > 2 else ''
+        return (expiry_norm, strike_str, put_call)
+
+    def strategy_key_for_description(description: str):
+        """Return (expiry_yyyy_mm_dd, type, tuple_of_strikes, put_call) for grouping same strategy, or None."""
+        parsed = parse_legs_from_description(description)
+        if parsed:
+            strategy_type = 'BUTTERFLY' if len(parsed) == 3 else 'VERTICAL'
+            exp_dates = set()
+            strikes = []
+            put_call = ''
+            for leg_key, _ in parsed:
+                exp_norm, strike_str, pc = parse_leg_key(leg_key)
+                if exp_norm:
+                    exp_dates.add(expiry_norm_to_yyyy_mm_dd(exp_norm))
+                try:
+                    strikes.append(float(strike_str))
+                except ValueError:
+                    pass
+                if pc:
+                    put_call = pc
+            if exp_dates and strikes:
+                return (sorted(exp_dates)[0], strategy_type, tuple(sorted(strikes)), put_call)
+        # Fallback for ratio butterflies (~BUTTERFLY, 1/7/6 etc.) that skip leg parsing
+        if description and re.search(r'~\s*BUTTERFLY', description, re.I):
+            expiry_match = re.search(r'(\d{1,2})\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+(\d{2})\b', description, re.I)
+            put_call_match = re.search(r'\b(PUT|CALL)\s*@', description, re.I)
+            strikes_match = re.search(r'\b(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)\s*(?:PUT|CALL)', description, re.I)
+            if expiry_match and put_call_match and strikes_match:
+                day, month_abbr, year = expiry_match.group(1), expiry_match.group(2).upper(), expiry_match.group(3)
+                expiry_norm = f"{int(day):02d}{month_abbr}{year}"
+                exp_yyyy_mm_dd = expiry_norm_to_yyyy_mm_dd(expiry_norm)
+                put_call = put_call_match.group(1).upper()
+                try:
+                    s1, s2, s3 = float(strikes_match.group(1)), float(strikes_match.group(2)), float(strikes_match.group(3))
+                    strikes_tuple = tuple(sorted([s1, s2, s3]))
+                    if exp_yyyy_mm_dd and strikes_tuple:
+                        return (exp_yyyy_mm_dd, 'BUTTERFLY', strikes_tuple, put_call)
+                except (ValueError, TypeError):
+                    pass
+        return None
+
+    def _label_for_strategy_key(key) -> str:
+        """Return a short label for a strategy key: (expiry, type, strikes_tuple, put_call) -> e.g. '63/64/65 PUT Butterfly'."""
+        if not key or isinstance(key, int):
+            return ''
+        _, strategy_type, strikes_tuple, put_call = (key + (None, None, None, None))[:4]
+        if not strikes_tuple:
+            return ''
+        strikes_str = '/'.join(str(int(s)) if s == int(s) else str(s) for s in strikes_tuple)
+        return f"{strikes_str} {put_call or '?'} {strategy_type or 'Strategy'}"
+
+    def split_closed_pairs_and_merged_details(details: list) -> tuple:
+        """
+        Group details by strategy and identify closed pairs.
+
+        Returns (closed_pairs, merged_remaining) where:
+        - closed_pairs: list of dicts describing round-trips. Shapes:
+            * Standard strategy pair: { 'label', 'open_detail', 'close_detail', 'net_profit' }
+            * Butterfly closing two verticals: { 'label', 'open_details': [d1, d2], 'close_detail', 'net_profit' }
+        - merged_remaining: list of merged detail rows for non-pair strategies (same shape as merge_details_by_strategy).
+        """
+        from collections import OrderedDict, defaultdict
+
+        if not details:
+            return ([], [])
+
+        closed_pairs = []
+
+        # ------------------------------------------------------------------
+        # Pre-pass: handle the case where ONE SOLD butterfly closes TWO BOT
+        # verticals whose strikes are the wings of that butterfly.
+        # ------------------------------------------------------------------
+        parsed_entries = []
+        for idx, d in enumerate(details):
+            desc = d.get('description', '')
+            key = strategy_key_for_description(desc)
+            qty = parse_qty_from_description(desc)
+            parsed_entries.append({
+                'idx': idx,
+                'detail': d,
+                'key': key,
+                'qty': qty,
+            })
+
+        vertical_by_key = defaultdict(list)
+        butterflies = []
+        for entry in parsed_entries:
+            key = entry['key']
+            qty = entry['qty']
+            if not key or isinstance(key, int):
+                continue
+            try:
+                exp, strategy_type, strikes_tuple, put_call = key
+            except ValueError:
+                continue
+            if strategy_type == 'VERTICAL' and qty > 0:
+                # Long vertical (BOT) – candidate for being closed by a butterfly.
+                vertical_by_key[key].append(entry)
+            elif strategy_type == 'BUTTERFLY' and qty < 0:
+                # Short butterfly (SOLD) – candidate for closing two verticals.
+                butterflies.append(entry)
+
+        used_indices = set()
+        for b in butterflies:
+            bkey = b['key']
+            try:
+                exp, strategy_type, strikes_tuple, put_call = bkey
+            except ValueError:
+                continue
+            if not strikes_tuple or len(strikes_tuple) != 3:
+                continue
+            # Wings: (low, mid, high) -> two verticals: (mid, high) and (low, mid)
+            low, mid, high = sorted(strikes_tuple)
+            key_high = (exp, 'VERTICAL', (mid, high), put_call)
+            key_low = (exp, 'VERTICAL', (low, mid), put_call)
+
+            # Find unused BOT vertical for each wing.
+            cand_high = None
+            for entry in vertical_by_key.get(key_high, []):
+                if entry['idx'] not in used_indices:
+                    cand_high = entry
+                    break
+
+            cand_low = None
+            for entry in vertical_by_key.get(key_low, []):
+                if entry['idx'] not in used_indices and entry is not cand_high:
+                    cand_low = entry
+                    break
+
+            if not cand_high or not cand_low:
+                continue
+
+            used_indices.update({b['idx'], cand_high['idx'], cand_low['idx']})
+
+            label = (_label_for_strategy_key(bkey) or '').strip()
+            if label:
+                label = f"{label} (closed 2 verticals)"
+            else:
+                label = "Butterfly closed 2 verticals"
+
+            open_d1 = cand_high['detail']
+            open_d2 = cand_low['detail']
+            close_d = b['detail']
+            net_profit = (
+                float(open_d1.get('amount', 0)) +
+                float(open_d2.get('amount', 0)) +
+                float(close_d.get('amount', 0))
+            )
+            closed_pairs.append({
+                'label': label,
+                'open_details': [open_d1, open_d2],
+                'close_detail': close_d,
+                'net_profit': round(net_profit, 2)
+            })
+
+        # ------------------------------------------------------------------
+        # Remaining details: group by strategy key and form multiple
+        # standard closed pairs (BOT vs SOLD) per strategy.
+        # ------------------------------------------------------------------
+        by_key = OrderedDict()
+        for idx, d in enumerate(details):
+            if idx in used_indices:
+                continue
+            k = strategy_key_for_description(d.get('description', ''))
+            if k is None:
+                # Use a unique int key so these flow straight to merged_remaining.
+                by_key[id(d)] = [d]
+                continue
+            if k not in by_key:
+                by_key[k] = []
+            by_key[k].append(d)
+
+        merged_remaining = []
+        for key, group_list in by_key.items():
+            # key is an int sentinel for "no strategy key"; just pass through.
+            if isinstance(key, int):
+                merged_remaining.extend(group_list)
+                continue
+
+            # Sort by datetime (then ref) to get a stable, time-based order.
+            group_sorted = sorted(
+                group_list,
+                key=lambda d: ((d.get('datetime') or ''), (d.get('ref') or ''))
+            )
+
+            bots = []
+            solds = []
+            for d in group_sorted:
+                qty = parse_qty_from_description(d.get('description', ''))
+                if qty > 0:
+                    bots.append(d)
+                elif qty < 0:
+                    solds.append(d)
+
+            num_pairs = min(len(bots), len(solds))
+            if num_pairs > 0:
+                label = _label_for_strategy_key(key)
+                used_ids = set()
+                for i in range(num_pairs):
+                    open_d = bots[i]
+                    close_d = solds[i]
+                    used_ids.add(id(open_d))
+                    used_ids.add(id(close_d))
+                    net_profit = float(open_d.get('amount', 0)) + float(close_d.get('amount', 0))
+                    closed_pairs.append({
+                        'label': label,
+                        'open_detail': open_d,
+                        'close_detail': close_d,
+                        'net_profit': round(net_profit, 2)
+                    })
+
+                remaining = [d for d in group_sorted if id(d) not in used_ids]
+                if remaining:
+                    first = remaining[0]
+                    net_amount = sum(d.get('amount', 0) for d in remaining)
+                    refs = [d.get('ref', '') for d in remaining if d.get('ref')]
+                    _pe = (first.get('leg_type') or first.get('pos_effect') or '').upper()
+                    _leg = 'To Close' if _pe == 'TO CLOSE' else 'To Open'
+                    merged_remaining.append({
+                        'date': first.get('date'),
+                        'time': first.get('time'),
+                        'datetime': first.get('datetime', ''),
+                        'description': first.get('description', ''),
+                        'amount': net_amount,
+                        'ref': ', '.join(refs) if refs else first.get('ref', ''),
+                        'leg_type': _leg
+                    })
+            else:
+                # No BOT/SOLD pairs for this strategy – merge into a single row.
+                first = group_sorted[0]
+                net_amount = sum(d.get('amount', 0) for d in group_sorted)
+                refs = [d.get('ref', '') for d in group_sorted if d.get('ref')]
+                _pe = (first.get('leg_type') or first.get('pos_effect') or '').upper()
+                _leg = 'To Close' if _pe == 'TO CLOSE' else 'To Open'
+                merged_remaining.append({
+                    'date': first.get('date'),
+                    'time': first.get('time'),
+                    'datetime': first.get('datetime', ''),
+                    'description': first.get('description', ''),
+                    'amount': net_amount,
+                    'ref': ', '.join(refs) if refs else first.get('ref', ''),
+                    'leg_type': _leg
+                })
+
+        return (closed_pairs, merged_remaining)
+
+    def merge_details_by_strategy(details: list) -> list:
+        """Merge details that refer to the same option strategy (same expiry, strikes, type) so net cost is shown."""
+        _, merged = split_closed_pairs_and_merged_details(details)
+        return merged
+
+    def build_strategies_for_group(group: dict) -> list:
+        """Build strategies list from group details; each strategy has detail_index, type, cost, legs (expiration_date YYYY-MM-DD, strike, put_call, qty).
+        cost = cost basis (negative when we received credit at open (SOLD), positive when we paid (BOT)) so that P/L = close_credit_debit - cost matches TOS."""
+        strategies = []
+        for detail_index, detail in enumerate(group.get('details', [])):
+            description = detail.get('description', '')
+            parsed = parse_legs_from_description(description)
+            if not parsed:
+                continue
+            strategy_type = 'BUTTERFLY' if len(parsed) == 3 else 'VERTICAL'
+            legs = []
+            for leg_key, qty in parsed:
+                exp_norm, strike_str, put_call = parse_leg_key(leg_key)
+                exp_yyyy_mm_dd = expiry_norm_to_yyyy_mm_dd(exp_norm)
+                try:
+                    strike = float(strike_str)
+                except ValueError:
+                    strike = 0.0
+                legs.append({
+                    'expiration_date': exp_yyyy_mm_dd,
+                    'strike': strike,
+                    'put_call': put_call,
+                    'qty': qty
+                })
+            amount = float(detail.get('amount', 0))
+            # Cost basis: SOLD (qty < 0) = we received credit → negative basis; BOT (qty > 0) = we paid → positive basis.
+            open_qty = parse_qty_from_description(description)
+            opened_with_bot = open_qty > 0
+            cost_basis = -amount if open_qty < 0 else amount
+            strategies.append({
+                'detail_index': detail_index,
+                'type': strategy_type,
+                'cost': cost_basis,
+                'legs': legs,
+                'opened_with_bot': opened_with_bot
+            })
+        return strategies
+
+    with open(csv_path, newline='', encoding='utf-8') as csv_file:
+        reader = csv.reader(csv_file)
+        for row in reader:
+            if not row:
+                continue
+            joined = ' '.join(cell.strip() for cell in row if cell)
+            if 'Account Statement for D-67593819 (margin)' in joined:
+                section_found = True
+                header_map = None
+                continue
+            if section_found and 'Futures Statements' in joined:
+                break
+            if not section_found:
+                continue
+
+            if header_map is None:
+                if 'DATE' in row and 'TIME' in row and 'DESCRIPTION' in row and 'AMOUNT' in row:
+                    header_map = {name.strip(): index for index, name in enumerate(row)}
+                continue
+
+            def get_field(field_name: str) -> str:
+                idx = header_map.get(field_name)
+                if idx is None or idx >= len(row):
+                    return ''
+                return row[idx].strip()
+
+            row_type = get_field('TYPE')
+            if row_type != 'TRD':
+                continue
+
+            date_str = get_field('DATE')
+            time_str = get_field('TIME')
+            description = get_field('DESCRIPTION')
+            ref_number = get_field('REF #')
+            amount = parse_amount(get_field('AMOUNT'))
+
+            qty = parse_qty_from_description(description)
+            ticker = extract_ticker(description)
+            normalized_desc = normalize_description(description)
+            group_key = ticker if ticker else (normalized_desc or description)
+
+            if group_key not in active_groups:
+                active_groups[group_key] = {
+                    'open_date': date_str,
+                    'open_datetime': f"{date_str} {time_str}".strip(),
+                    'ticker': ticker,
+                    'description': normalized_desc,
+                    'net_qty': 0,
+                    'pl_total': Decimal('0'),
+                    'details': [],
+                    'legs': {}  # leg_key -> net quantity; closed only when all legs are zero
+                }
+
+            group = active_groups[group_key]
+            group['net_qty'] += qty
+            group['pl_total'] += amount
+            parsed_legs = parse_legs_from_description(description)
+            for leg_key, leg_qty in parsed_legs:
+                group['legs'][leg_key] = group['legs'].get(leg_key, 0) + leg_qty
+            group['details'].append({
+                'date': date_str,
+                'time': time_str,
+                'datetime': f"{date_str} {time_str}".strip(),
+                'description': description,
+                'amount': float(amount),
+                'ref': ref_number
+            })
+
+            # Do not close mid-statement when net_qty hits 0 (e.g. offsetting butterfly).
+            # One position per ticker; Open/Closed determined at end of statement.
+
+    # Parse Account Trade History section for trades missing from TRD section
+    # Track existing trade timestamps to avoid duplicates
+    existing_trade_timestamps = set()
+    for group in active_groups.values():
+        for detail in group.get('details', []):
+            datetime_str = detail.get('datetime', '').strip()
+            if datetime_str:
+                existing_trade_timestamps.add(datetime_str)
+    
+    with open(csv_path, newline='', encoding='utf-8') as csv_file:
+        reader = csv.reader(csv_file)
+        in_trade_history = False
+        current_trade = None
+        
+        for row in reader:
+            if not row:
+                continue
+            
+            joined = ' '.join(cell.strip() for cell in row if cell)
+            
+            # Start of Account Trade History section
+            if 'Account Trade History' in joined:
+                in_trade_history = True
+                continue
+            
+            # End of Account Trade History section
+            if in_trade_history and ('Equities' in joined or 'Options' in joined):
+                break
+            
+            if not in_trade_history:
+                continue
+            
+            # Skip header row
+            if 'Exec Time' in joined and 'Spread' in joined:
+                continue
+            
+            # Check if this is a new trade (has timestamp in first cell after leading comma)
+            if len(row) > 1 and row[1] and '/' in row[1] and ':' in row[1]:
+                # Save previous trade if any
+                if current_trade:
+                    # Use Account Trade History pos_effect to either add a missing trade
+                    # or annotate an existing TRD trade (same exec_time) with leg_type.
+                    pos_effect = current_trade.get('pos_effect', '')
+                    exec_time = current_trade.get('exec_time', '')
+                    
+                    if pos_effect in ('TO OPEN', 'TO CLOSE'):
+                        if exec_time in existing_trade_timestamps:
+                            # Trade already present from TRD section – update its leg_type using Pos Effect.
+                            norm_leg = 'To Open' if pos_effect == 'TO OPEN' else 'To Close'
+                            for group in active_groups.values():
+                                for detail in group.get('details', []):
+                                    dt = (detail.get('datetime', '') or '').strip()
+                                    if dt == exec_time and not detail.get('leg_type'):
+                                        detail['leg_type'] = norm_leg
+                        else:
+                            # Process the completed trade that was missing from TRD section.
+                            ticker = current_trade.get('ticker', '')
+                            if ticker:
+                                # Build legs description
+                                legs = current_trade.get('legs', [])
+                                if legs:
+                                    exp = current_trade.get('exp', '')
+                                    opt_type = legs[0][1] if legs else ''
+                                    strikes_str = '/'.join(leg[0] for leg in legs if leg[0])
+                                    current_trade['legs_desc'] = f"{exp} {strikes_str} {opt_type}"
+                                
+                                # Build description from trade data
+                                action = 'BOT' if current_trade.get('side') == 'BUY' else 'SOLD'
+                                qty_str = current_trade.get('qty', '')
+                                spread = current_trade.get('spread', '')
+                                legs_desc = current_trade.get('legs_desc', '')
+                                net_price = current_trade.get('net_price', '0')
+                                
+                                description = f"{action} {qty_str} {spread} {ticker} 100 {legs_desc} @{net_price}"
+                                
+                                # Parse date/time
+                                exec_time = current_trade.get('exec_time', '')
+                                if exec_time:
+                                    parts = exec_time.split()
+                                    date_str = parts[0] if len(parts) > 0 else ''
+                                    time_str = parts[1] if len(parts) > 1 else ''
+                                else:
+                                    date_str = ''
+                                    time_str = ''
+                                
+                                # Calculate amount (negative for BOT, positive for SOLD)
+                                try:
+                                    net_price_val = float(net_price)
+                                    qty_val = int(qty_str.replace('+', '').replace('-', ''))
+                                    amount = net_price_val * qty_val * 100  # $100 per contract
+                                    if current_trade.get('side') == 'BUY':
+                                        amount = -amount
+                                except (ValueError, AttributeError):
+                                    amount = 0
+                                
+                                # Add to active_groups
+                                qty = parse_qty_from_description(description)
+                                normalized_desc = normalize_description(description)
+                                group_key = ticker if ticker else (normalized_desc or description)
+                                
+                                if group_key not in active_groups:
+                                    active_groups[group_key] = {
+                                        'open_date': date_str,
+                                        'open_datetime': f"{date_str} {time_str}".strip(),
+                                        'ticker': ticker,
+                                        'description': normalized_desc,
+                                        'net_qty': 0,
+                                        'pl_total': Decimal('0'),
+                                        'details': [],
+                                        'legs': {}
+                                    }
+                                
+                                group = active_groups[group_key]
+                                group['net_qty'] += qty
+                                group['pl_total'] += Decimal(str(amount))
+                                parsed_legs = parse_legs_from_description(description)
+                                for leg_key, leg_qty in parsed_legs:
+                                    group['legs'][leg_key] = group['legs'].get(leg_key, 0) + leg_qty
+                                group['details'].append({
+                                    'date': date_str,
+                                    'time': time_str,
+                                    'datetime': f"{date_str} {time_str}".strip(),
+                                    'description': description,
+                                    'amount': float(amount),
+                                    'ref': '',
+                                    'leg_type': 'To Open' if pos_effect == 'TO OPEN' else 'To Close'
+                                })
+                
+                # Start new trade
+                # Format: ,Exec Time,Spread,Side,Qty,Pos Effect,Symbol,Exp,Strike,Type,Price,Net Price,Order Type
+                current_trade = {
+                    'exec_time': row[1].strip() if len(row) > 1 else '',
+                    'spread': row[2].strip() if len(row) > 2 else '',
+                    'side': row[3].strip() if len(row) > 3 else '',
+                    'qty': row[4].strip() if len(row) > 4 else '',
+                    'pos_effect': row[5].strip() if len(row) > 5 else '',
+                    'ticker': row[6].strip() if len(row) > 6 else '',
+                    'exp': row[7].strip() if len(row) > 7 else '',
+                    'strike': row[8].strip() if len(row) > 8 else '',
+                    'type': row[9].strip() if len(row) > 9 else '',
+                    'price': row[10].strip() if len(row) > 10 else '',
+                    'net_price': row[11].strip() if len(row) > 11 else '',
+                    'legs': [(row[8].strip() if len(row) > 8 else '', row[9].strip() if len(row) > 9 else '')],
+                    'legs_desc': ''
+                }
+            elif current_trade and len(row) > 3 and row[3] in ('BUY', 'SELL'):
+                # Continuation leg: ,,,Side,Qty,Pos Effect,Symbol,Exp,Strike,Type,Price,Net Price Indicator
+                strike = row[8].strip() if len(row) > 8 else ''
+                opt_type = row[9].strip() if len(row) > 9 else ''
+                current_trade['legs'].append((strike, opt_type))
+        
+        # Process last trade if any
+        if current_trade:
+            pos_effect = current_trade.get('pos_effect', '')
+            exec_time = current_trade.get('exec_time', '')
+            
+            if pos_effect in ('TO OPEN', 'TO CLOSE'):
+                if exec_time in existing_trade_timestamps:
+                    # Final trade already present from TRD – annotate existing detail with leg_type.
+                    norm_leg = 'To Open' if pos_effect == 'TO OPEN' else 'To Close'
+                    for group in active_groups.values():
+                        for detail in group.get('details', []):
+                            dt = (detail.get('datetime', '') or '').strip()
+                            if dt == exec_time and not detail.get('leg_type'):
+                                detail['leg_type'] = norm_leg
+                else:
+                    ticker = current_trade.get('ticker', '')
+                    if ticker:
+                        # Build legs description
+                        legs = current_trade.get('legs', [])
+                        if legs:
+                            exp = current_trade.get('exp', '')
+                            opt_type = legs[0][1] if legs else ''
+                            strikes_str = '/'.join(leg[0] for leg in legs if leg[0])
+                            current_trade['legs_desc'] = f"{exp} {strikes_str} {opt_type}"
+                        
+                        action = 'BOT' if current_trade.get('side') == 'BUY' else 'SOLD'
+                        qty_str = current_trade.get('qty', '')
+                        spread = current_trade.get('spread', '')
+                        legs_desc = current_trade.get('legs_desc', '')
+                        net_price = current_trade.get('net_price', '0')
+                        
+                        description = f"{action} {qty_str} {spread} {ticker} 100 {legs_desc} @{net_price}"
+                        
+                        exec_time = current_trade.get('exec_time', '')
+                        if exec_time:
+                            parts = exec_time.split()
+                            date_str = parts[0] if len(parts) > 0 else ''
+                            time_str = parts[1] if len(parts) > 1 else ''
+                        else:
+                            date_str = ''
+                            time_str = ''
+                        
+                        try:
+                            net_price_val = float(net_price)
+                            qty_val = int(qty_str.replace('+', '').replace('-', ''))
+                            amount = net_price_val * qty_val * 100
+                            if current_trade.get('side') == 'BUY':
+                                amount = -amount
+                        except (ValueError, AttributeError):
+                            amount = 0
+                        
+                        qty = parse_qty_from_description(description)
+                        normalized_desc = normalize_description(description)
+                        group_key = ticker if ticker else (normalized_desc or description)
+                        
+                        if group_key not in active_groups:
+                            active_groups[group_key] = {
+                                'open_date': date_str,
+                                'open_datetime': f"{date_str} {time_str}".strip(),
+                                'ticker': ticker,
+                                'description': normalized_desc,
+                                'net_qty': 0,
+                                'pl_total': Decimal('0'),
+                                'details': [],
+                                'legs': {}
+                            }
+                        
+                        group = active_groups[group_key]
+                        group['net_qty'] += qty
+                        group['pl_total'] += Decimal(str(amount))
+                        parsed_legs = parse_legs_from_description(description)
+                        for leg_key, leg_qty in parsed_legs:
+                            group['legs'][leg_key] = group['legs'].get(leg_key, 0) + leg_qty
+                        group['details'].append({
+                            'date': date_str,
+                            'time': time_str,
+                            'datetime': f"{date_str} {time_str}".strip(),
+                            'description': description,
+                            'amount': float(amount),
+                            'ref': '',
+                            'leg_type': 'To Open' if pos_effect == 'TO OPEN' else 'To Close'
+                        })
+
+    today = datetime.now()
+    for group in active_groups.values():
+        raw_details = group.get('details', [])
+        closed_pairs, merged_details = split_closed_pairs_and_merged_details(raw_details)
+        group['closed_pairs'] = closed_pairs
+        group['details'] = merged_details
+        # Ensure leg_type on every detail for API/UI
+        def _detail_leg_type(d, default):
+            if not d:
+                return default
+            lt = d.get('leg_type') or (d.get('pos_effect') or '').upper()
+            return 'To Close' if lt == 'TO CLOSE' else (lt if lt in ('To Open', 'To Close') else default)
+        for pair in group.get('closed_pairs', []):
+            for open_d in (pair.get('open_details') or []):
+                if open_d:
+                    open_d['leg_type'] = _detail_leg_type(open_d, 'To Open')
+            if pair.get('open_detail'):
+                pair['open_detail']['leg_type'] = _detail_leg_type(pair['open_detail'], 'To Open')
+            if pair.get('close_detail'):
+                pair['close_detail']['leg_type'] = _detail_leg_type(pair['close_detail'], 'To Close')
+        for d in group.get('details', []):
+            if d and 'leg_type' not in d:
+                d['leg_type'] = _detail_leg_type(d, 'To Open')
+        open_date = datetime.strptime(group['open_date'], '%m/%d/%y')
+        legs = group.get('legs') or {}
+        # Closed only when all legs (strike + quantity) are zero; else fall back to net_qty
+        if legs:
+            is_closed = all(q == 0 for q in legs.values())
+        else:
+            is_closed = group['net_qty'] == 0
+        if is_closed:
+            close_date_str = group['details'][-1].get('date', group['open_date']) if group['details'] else group['open_date']
+            close_date = datetime.strptime(close_date_str, '%m/%d/%y')
+            calendar_days = (close_date.date() - open_date.date()).days
+            trading_days = count_us_trading_days(open_date, close_date)
+            pos = {
+                'open_date': group['open_date'],
+                'open_datetime': group['open_datetime'],
+                'ticker': group['ticker'],
+                'pl_total': float(group['pl_total']),
+                'status': 'Closed',
+                'close_date': close_date_str,
+                'duration': f"Trading days {trading_days} (calendar days {calendar_days})",
+                'trading_days': trading_days,
+                'calendar_days': calendar_days,
+                'details': group['details'],
+                'closed_pairs': group.get('closed_pairs', []),
+                'strategies': build_strategies_for_group(group)
+            }
+            if not group.get('closed_pairs') and group.get('details') and all((d.get('leg_type') or '').strip() == 'To Close' for d in group['details']):
+                pos['status'] = 'Closed without Open'
+            positions.append(pos)
+        else:
+            calendar_days = (today.date() - open_date.date()).days
+            trading_days = count_us_trading_days(open_date, today)
+            pos = {
+                'open_date': group['open_date'],
+                'open_datetime': group['open_datetime'],
+                'ticker': group['ticker'],
+                'pl_total': float(group['pl_total']),
+                'status': 'Open',
+                'close_date': None,
+                'duration': f"Trading days {trading_days} (calendar days {calendar_days})",
+                'trading_days': trading_days,
+                'calendar_days': calendar_days,
+                'details': group['details'],
+                'closed_pairs': group.get('closed_pairs', []),
+                'strategies': build_strategies_for_group(group)
+            }
+            if not group.get('closed_pairs') and group.get('details') and all((d.get('leg_type') or '').strip() == 'To Close' for d in group['details']):
+                pos['status'] = 'Closed without Open'
+            positions.append(pos)
+
+    closed_positions = [p for p in positions if p.get('status') == 'Closed']
+    open_positions = [p for p in positions if p.get('status') == 'Open']
+    closed_total_pl = sum(p.get('pl_total', 0) for p in closed_positions)
+    closed_count = len(closed_positions)
+    avg_close_trading_days = (
+        sum(p.get('trading_days', 0) for p in closed_positions) / closed_count
+        if closed_count else 0
+    )
+    avg_close_calendar_days = (
+        sum(p.get('calendar_days', 0) for p in closed_positions) / closed_count
+        if closed_count else 0
+    )
+    avg_closed_pl = closed_total_pl / closed_count if closed_count else 0
+
+    summary = {
+        'open_count': len(open_positions),
+        'closed_count': closed_count,
+        'closed_total_pl': float(closed_total_pl),
+        'avg_close_trading_days': float(avg_close_trading_days),
+        'avg_close_calendar_days': float(avg_close_calendar_days),
+        'avg_closed_pl': float(avg_closed_pl)
+    }
+
+    return {'positions': positions, 'summary': summary}
 
 
 class LayoffTracker:
@@ -3712,27 +4638,46 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
             current += timedelta(days=1)
         return count
     
-    def analyze_recovery_history(self, price_history: List[Dict], pct_threshold: float, bearish_date_str: str, events: List[Dict] = None) -> List[Dict]:
-        """Analyze 120 days of price history to find similar drops and recovery times
+    def analyze_recovery_history(self, price_history: List[Dict], pct_threshold: float, bearish_date_str: str, events: List[Dict] = None, recovery_threshold: float = 6.0, spy_history: List[Dict] = None) -> List[Dict]:
+        """Analyze 180 days of price history to find similar drops and recovery times
         
         Args:
             price_history: List of price data points (sorted by date)
             pct_threshold: Minimum drop percentage (e.g., -5.0 for -5%)
             bearish_date_str: Current bearish date (exclude this from analysis)
-            events: List of events (earnings/dividends) from 120 days before bearish_date to bearish_date
+            events: List of events (earnings/dividends) from 180 days before bearish_date to bearish_date
+            recovery_threshold: Minimum recovery percentage from drop price
+            spy_history: Optional list of SPY price data (date, price) for S&P 500 drop/recovery %
         
         Returns:
             Dict with:
-              - 'items': list of per-drop dicts (drop_date, drop_pct, recovery_days, recovery_trading_days, recovery_date, recovery_pct, event_info)
+              - 'items': list of per-drop dicts (drop_date, drop_pct, recovery_days, recovery_trading_days, recovery_date, recovery_pct, sp500_drop_pct, sp500_recovery_pct, event_info)
               - 'summary': aggregated metrics for 7 trading days and 40 calendar days
         """
         recovery_items: List[Dict] = []
+        
+        # Build date -> price map for SPY if provided
+        spy_by_date = {}
+        if spy_history and len(spy_history) > 0:
+            for entry in spy_history:
+                d = entry.get('date')
+                p = entry.get('price')
+                if d is not None and p is not None:
+                    try:
+                        spy_by_date[str(d)] = float(p)
+                    except (TypeError, ValueError):
+                        pass
         
         if not price_history or len(price_history) < 2:
             return {
                 'items': [],
                 'summary': {
                     'within_7_trading_days': {
+                        'count_recovered': 0,
+                        'total_events': 0,
+                        'percentage': 0.0,
+                    },
+                    'within_10_trading_days': {
                         'count_recovered': 0,
                         'total_events': 0,
                         'percentage': 0.0,
@@ -3747,10 +4692,7 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                 },
             }
         
-        # Threshold range: ±1% (e.g., if -5%, find -4% and above/worse)
-        # For negative thresholds, "above" means more negative (worse drops)
-        # So if threshold is -5%, we find drops <= -4% (i.e., -4% or worse)
-        max_threshold = pct_threshold + 1.0  # e.g., -4% for threshold of -5%
+        # Threshold range: exact threshold and worse (e.g., if -5%, find -5% or worse)
         
         # Only analyze dates BEFORE the current bearish date
         sorted_history = sorted(price_history, key=lambda x: x.get('date', ''))
@@ -3770,12 +4712,29 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
             # Calculate drop percentage (day-over-day)
             drop_pct = ((current_price - prev_price) / prev_price) * 100
             
-                # Check if drop matches threshold: drop_pct <= (threshold + 1%)
-            # For -5% threshold, this means drop_pct <= -4% (finds -4% and worse)
-            if drop_pct <= max_threshold:
-                # Find recovery (2% bounce from drop price)
+            # Check if drop matches threshold: drop_pct <= threshold
+            # For -5% threshold, this means drop_pct <= -5% (finds -5% and worse)
+            if drop_pct <= pct_threshold:
+                # Find recovery (recovery_threshold% bounce from drop price)
                 drop_price = current_price
-                recovery_target = drop_price * 1.02  # 2% recovery from drop price
+                recovery_target = drop_price * (1 + recovery_threshold / 100)  # recovery_threshold% recovery from drop price
+                # Debug: Write to file AND print to stdout
+                import sys
+                import os
+                debug_msg = f"[RECOVERY HISTORY DEBUG] Drop date: {current_date}, drop_price: {drop_price:.2f}, recovery_threshold: {recovery_threshold}%, recovery_target: {recovery_target:.2f}\n"
+                # Write directly to log file
+                try:
+                    log_file_path = os.path.join(os.path.dirname(__file__), 'server_output.log')
+                    with open(log_file_path, 'a', encoding='utf-8') as f:
+                        f.write(debug_msg)
+                        f.flush()
+                        os.fsync(f.fileno())  # Force write to disk
+                except Exception as e:
+                    sys.__stderr__.write(f"[ERROR] Failed to write RECOVERY HISTORY DEBUG: {e}\n")
+                    sys.__stderr__.flush()
+                # Also print (goes to LogCapture/SSE stream)
+                print(debug_msg.strip(), flush=True)
+                print(debug_msg, file=sys.stderr, flush=True)
                 
                 recovery_date = None
                 recovery_days = None
@@ -3794,7 +4753,7 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                     if future_date >= bearish_date_str:
                         break
                     
-                    # Check if recovered by 2% (price >= drop_price * 1.02)
+                    # Check if recovered by recovery_threshold% (price >= drop_price * (1 + recovery_threshold / 100))
                     if future_price >= recovery_target:
                         # Calculate days between drop and recovery
                         try:
@@ -3818,6 +4777,20 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                     except ValueError:
                         recovery_trading_days = None
                 
+                # S&P 500 (SPY) drop % and recovery % when spy_history is provided
+                sp500_drop_pct = None
+                sp500_recovery_pct = None
+                if spy_by_date:
+                    prev_date = prev.get('date', '')
+                    spy_prev = spy_by_date.get(prev_date) if prev_date else None
+                    spy_drop = spy_by_date.get(current_date)
+                    if spy_prev is not None and spy_drop is not None and spy_prev > 0:
+                        sp500_drop_pct = round(((spy_drop - spy_prev) / spy_prev) * 100, 1)
+                    if recovery_date is not None and spy_drop is not None and spy_drop > 0:
+                        spy_recovery = spy_by_date.get(recovery_date)
+                        if spy_recovery is not None:
+                            sp500_recovery_pct = round(((spy_recovery - spy_drop) / spy_drop) * 100, 1)
+                
                 # Event matching is now done in frontend - no longer needed here
                 recovery_item = {
                     'drop_date': current_date,
@@ -3825,7 +4798,9 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                     'recovery_days': recovery_days,
                     'recovery_trading_days': recovery_trading_days,
                     'recovery_date': recovery_date,
-                    'recovery_pct': round(recovery_pct, 2) if recovery_pct is not None else None
+                    'recovery_pct': round(recovery_pct, 2) if recovery_pct is not None else None,
+                    'sp500_drop_pct': sp500_drop_pct,
+                    'sp500_recovery_pct': sp500_recovery_pct,
                 }
                 recovery_items.append(recovery_item)
         
@@ -3850,6 +4825,14 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
             and item['recovery_trading_days'] <= 7
         ]
         
+        # 10-trading-day metric
+        recovered_within_10_trading = [
+            item for item in recovery_items
+            if item.get('recovery_pct') is not None
+            and item.get('recovery_trading_days') is not None
+            and item['recovery_trading_days'] <= 10
+        ]
+        
         # 40-calendar-day metric (existing behavior)
         recovered_within_40_days = [
             item for item in recovery_items
@@ -3866,9 +4849,11 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
         
         # Aggregate stats
         count_7 = len(recovered_within_7_trading)
+        count_10 = len(recovered_within_10_trading)
         count_40 = len(recovered_within_40_days)
         
         pct_7 = (count_7 / total_drops * 100.0) if total_drops > 0 else 0.0
+        pct_10 = (count_10 / total_drops * 100.0) if total_drops > 0 else 0.0
         pct_40 = (count_40 / total_drops * 100.0) if total_drops > 0 else 0.0
         
         avg_recovery_pct_40 = (
@@ -3886,6 +4871,11 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                 'count_recovered': count_7,
                 'total_events': total_drops,
                 'percentage': round(pct_7, 1),
+            },
+            'within_10_trading_days': {
+                'count_recovered': count_10,
+                'total_events': total_drops,
+                'percentage': round(pct_10, 1),
             },
             'within_40_days': {
                 'count_recovered': count_40,
@@ -4429,6 +5419,7 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
         industry: Optional[str] = None,
         filter_type: str = 'bearish',
         pct_threshold: Optional[float] = None,
+        recovery_threshold: float = 6.0,
         flexible_days: int = 0,
         ticker_filter: Optional[str] = None
     ) -> tuple[List[Dict], List[str]]:
@@ -4559,7 +5550,7 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                     # 1. get_stock_price_on_date(ticker, bearish_date)
                     # 2. get_stock_price_on_date(ticker, target_date)
                     # 3. get_stock_price_history(ticker, bearish_date, target_date)
-                    graph_start_date = bearish_date - timedelta(days=120)  # Increased to 120 days for recovery history analysis
+                    graph_start_date = bearish_date - timedelta(days=180)  # Increased to 180 days for recovery history analysis
                     # Add 1 day to target_date to ensure we get data up to and including the target date
                     # (API might exclude the end_date, so adding 1 day ensures we get target_date)
                     price_history_end_date = target_date + timedelta(days=1)
@@ -4640,8 +5631,30 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
                     if pct_threshold is not None and filter_type == 'bearish':
                         # Only analyze for bearish drops, using the threshold
                         # No longer passing events - frontend will match events from earnings_dividends.events_during
-                        print(f"[RECOVERY HISTORY] Calling analyze_recovery_history for {ticker} (events will be matched in frontend)")
-                        rh_result = self.analyze_recovery_history(price_history, pct_threshold, actual_bearish_date_str, None)
+                        # Fetch SPY (S&P 500) history for same range to add sp500_drop_pct / sp500_recovery_pct per occurrence
+                        spy_history = []
+                        try:
+                            spy_history = self.get_stock_price_history('SPY', graph_start_date, price_history_end_date) or []
+                        except Exception:
+                            pass
+                        # Write directly to log file to ensure it's captured
+                        import os
+                        import sys
+                        log_file_path = os.path.join(os.path.dirname(__file__), 'server_output.log')
+                        debug_msg = f"[RECOVERY HISTORY] Calling analyze_recovery_history for {ticker} with recovery_threshold={recovery_threshold}% (events will be matched in frontend)\n"
+                        try:
+                            with open(log_file_path, 'a', encoding='utf-8') as f:
+                                f.write(debug_msg)
+                                f.flush()
+                            # Also write to stderr which should definitely appear
+                            sys.stderr.write(debug_msg)
+                            sys.stderr.flush()
+                        except Exception as e:
+                            error_msg = f"[ERROR] Failed to write debug to log file: {e}\n"
+                            sys.stderr.write(error_msg)
+                            sys.stderr.flush()
+                        print(f"[RECOVERY HISTORY] Calling analyze_recovery_history for {ticker} with recovery_threshold={recovery_threshold}% (events will be matched in frontend)")
+                        rh_result = self.analyze_recovery_history(price_history, pct_threshold, actual_bearish_date_str, None, recovery_threshold=recovery_threshold, spy_history=spy_history)
                         if isinstance(rh_result, dict):
                             recovery_history = rh_result.get('items', [])
                             recovery_history_summary = rh_result.get('summary')
@@ -9043,20 +10056,35 @@ Just the number, nothing else."""
             bearish_date_obj = datetime.strptime(stock_data['bearish_date'], '%Y-%m-%d')
             bearish_date_formatted = bearish_date_obj.strftime('%B %d, %Y')  # e.g., "December 16, 2025"
             
-            # Prepare price history (last 50 days)
-            price_history = stock_data.get('price_history', [])
-            price_history_text = ""
-            if price_history:
-                # Format as date: price
-                for entry in price_history[-50:]:  # Last 50 data points for full analysis
-                    date_str = entry.get('date', '')
-                    price = entry.get('price', '')
-                    if date_str and price:
-                        price_history_text += f"{date_str}: ${price:.2f}\n"
+            # Prepare computed stats (from backend-calculated summaries if available)
+            stats_lines = []
+            summary = stock_data.get('recovery_history_summary')
+            if isinstance(summary, dict):
+                within7 = summary.get('within_7_trading_days', {})
+                if isinstance(within7, dict):
+                    count_7 = within7.get('count_recovered')
+                    total_7 = within7.get('total_events')
+                    pct_7 = within7.get('percentage')
+                    if count_7 is not None and total_7 is not None and pct_7 is not None:
+                        stats_lines.append(f"- Recovered <=7 trading days: {count_7}/{total_7} ({pct_7}%)")
+                within10 = summary.get('within_10_trading_days', {})
+                if isinstance(within10, dict):
+                    count_10 = within10.get('count_recovered')
+                    total_10 = within10.get('total_events')
+                    pct_10 = within10.get('percentage')
+                    if count_10 is not None and total_10 is not None and pct_10 is not None:
+                        stats_lines.append(f"- Recovered <=10 trading days: {count_10}/{total_10} ({pct_10}%)")
+                within40 = summary.get('within_40_days', {})
+                if isinstance(within40, dict):
+                    count_40 = within40.get('count_recovered')
+                    total_40 = within40.get('total_events')
+                    pct_40 = within40.get('percentage')
+                    if count_40 is not None and total_40 is not None and pct_40 is not None:
+                        stats_lines.append(f"- Recovered <=40 days: {count_40}/{total_40} ({pct_40}%)")
+            stats_text = "\n".join(stats_lines) if stats_lines else "No computed stats available."
             
-            # Build comprehensive prompt
-            # Claude will search the web to understand why the stock dropped
-            prompt = f"""You are analyzing a stock drop for a broken-wing butterfly options trading strategy.
+            # Build strategy-fit prompt with web search and computed stats
+            prompt = f"""You are analyzing whether this stock fits a double broken-wing butterfly (BWB) ladder strategy.
 
 STOCK INFORMATION:
 - Ticker: {ticker}
@@ -9073,151 +10101,26 @@ DROP DETAILS:
 - Target Price: ${stock_data['target_price']:.2f}
 - Recovery Needed: {stock_data['recovery_pct']:.2f}%
 
-PRICE HISTORY (last 50 data points):
-{price_history_text}
-
 UPCOMING EVENTS:
 {self._format_events_for_ai(stock_data.get('earnings_dividends', {}))}
 
-STRATEGY CONTEXT:
-The trader uses a broken-wing butterfly options strategy after a stock experiences a drop of around 5%. This strategy requires specific characteristics to be effective.
-
-MY TRADING STRATEGY REQUIREMENTS (Broken-Wing Butterfly with 30-40 DTE):
-You are evaluating stocks for bullish Broken Wing Butterfly (BWB) strategies with 30–40 DTE that rely on:
-- Mean reversion after pullbacks
-- Stable price behavior
-- Liquid option chains
-- Early exits (20–35% profit)
-
-Ideal candidates must have:
-- Very high options liquidity (tight spreads, high open interest, high daily volume)
-- Frequent 3–5% moves with a tendency to stabilize or mean-revert afterward
-- Moderate to high implied volatility, especially after a drop
-- Deep option chains with many strikes, weekly expirations, and small strike increments
-- Large-cap or highly traded stocks with predictable behavior and strong institutional participation
-
-BWB SUITABILITY SCORING RULES:
-Score 9–10 (Excellent):
-- Large or mega-cap
-- Very liquid options
-- Mean-reverting behavior
-- Business-driven price action
-- No binary or overnight event risk
-
-Score 6–8 (Acceptable):
-- Generally stable but with some macro or sector sensitivity
-- Requires caution (prefer 40 DTE)
-
-Score 4–5 (Weak):
-- Trend-prone or macro-driven
-- Inconsistent mean reversion
-
-Score 1–3 (Avoid):
-- Biotechnology or FDA-driven
-- Airlines, shipping, logistics
-- Commodity-based (energy, materials)
-- High gap or event risk
-
-INDUSTRY BIAS:
-Favor (higher scores):
-- Information Technology
-- Communication Services
-- Consumer Discretionary (mega-caps)
-- Pharmaceuticals
-- Health Care Equipment & Services
-- Life Sciences Tools & Services
-- Industrial Conglomerates
-- Machinery
-- Electrical Equipment
-- Professional & Commercial Services
-
-Penalize (lower scores):
-- Biotechnology
-- Airlines & Transportation
-- Energy
-- Materials
-- Utilities
-- Real Estate
+COMPUTED STATS (from backend):
+{stats_text}
 
 TASK:
-1. IMPORTANT: Search the web to find specific news about why {ticker} ({company_name}) dropped {stock_data['pct_drop']:.2f}% on {bearish_date_formatted} ({stock_data['bearish_date']}). 
-   Search for: "{ticker} stock drop {bearish_date_formatted}" or "{company_name} news {bearish_date_formatted}" or "{ticker} analyst {bearish_date_formatted}"
-   Look specifically for:
-   - Analyst downgrades, price target cuts, or upgrades (check MarketBeat, Seeking Alpha, financial news)
-   - Earnings reports, guidance changes, or financial announcements
-   - Leadership changes, executive departures, CEO/CFO changes, or management announcements
-   - Regulatory news, policy changes, FDA approvals/rejections, or sector-specific events
-   - Company-specific news, press releases, or major announcements
-   - Market-wide events that affected the sector
-   If you cannot find specific news after searching, clearly state "I could not find specific news" rather than making assumptions.
-
-2. Analyze the price history to identify:
-   - Support and resistance levels
-   - Trend patterns (bullish/bearish/neutral)
-   - RSI-like patterns (overbought/oversold conditions)
-   - Historical recovery patterns
-
-3. Evaluate whether this ticker fits my broken-wing butterfly options strategy:
-   IMPORTANT: Evaluate based on the broken-wing butterfly strategy requirements and BWB Suitability Scoring Rules above. Consider all factors below.
-   
-   - Provide a strategy fit score (1-10) using the BWB Suitability Scoring Rules:
-     * 9-10: Excellent (large/mega-cap, very liquid options, mean-reverting, business-driven, no binary risk)
-     * 6-8: Acceptable (generally stable but some macro/sector sensitivity - prefer 40 DTE)
-     * 4-5: Weak (trend-prone or macro-driven, inconsistent mean reversion)
-     * 1-3: Avoid (biotech/FDA-driven, airlines/shipping/logistics, commodity-based, high gap/event risk)
-   
-   IMPORTANT: Apply industry bias when scoring:
-   - Favor: Information Technology, Communication Services, Consumer Discretionary (mega-caps), Pharmaceuticals, Health Care Equipment & Services, Life Sciences Tools & Services, Industrial Conglomerates, Machinery, Electrical Equipment, Professional & Commercial Services
-   - Penalize: Biotechnology, Airlines & Transportation, Energy, Materials, Utilities, Real Estate
-   
-   - Provide a short explanation (2-4 sentences) of the score
-   
-   - Liquidity Assessment: Evaluate options liquidity:
-     * Tight spreads (narrow bid-ask spreads)
-     * High open interest (active options trading)
-     * High daily volume (liquid options market)
-     * Assess whether liquidity is sufficient for broken-wing butterfly execution
-   
-   - IV Behavior Assessment: Evaluate implied volatility:
-     * Current IV level (low/moderate/high)
-     * IV behavior after drops (does IV spike appropriately?)
-     * IV rank/percentile if available
-     * Whether IV is suitable for the strategy
-   
-   - Mean-Reversion Tendencies: Analyze price behavior:
-     * Frequency of 3-5% moves
-     * Tendency to stabilize or mean-revert after drops
-     * Historical patterns of recovery after similar drops
-     * Whether price action shows mean-reverting characteristics
-   
-   - Red Flags: Identify any concerns:
-     * Upcoming earnings (timing relative to the drop)
-     * Significant news events
-     * Volatility spikes (unusual or excessive)
-     * Low float (limited shares available)
-     * Low trading volume
-     * Any other factors that could impact the strategy
-   
-   - Suitability: Provide a clear Yes/No on whether this ticker is suitable for a broken-wing butterfly after a 5% drop:
-     * "Yes" if it meets the key requirements and has no major red flags
-     * "No" if it lacks critical requirements or has significant red flags
-     * Be specific about why it is or isn't suitable
-
-4. Based on your research and analysis, provide:
-   - A recovery probability score (1-10):
-     * 1-4: Low recovery probability (weak bounce expected)
-     * 5-7: Moderate recovery probability (some bounce possible)
-     * 8-10: High recovery probability (strong bounce likely)
-   
-   - Explain why you gave this specific recovery score and whether you think it will recover or not
-   - Briefly explain the reason the stock fell (based on your web search/knowledge)
+1. Search the web for recent news and explain why the stock dropped on {bearish_date_formatted}. If no specific reason is found, say so.
+2. Provide a strategy fit score (1-10) for a double BWB ladder strategy focused on:
+   - Company size and stability (prefer large/mega-cap)
+   - Options liquidity (tight spreads, high open interest, volume)
+   - Event risk (penalize event-driven drops)
+   - Mean reversion/bounce behavior (use computed stats if available)
 
 CRITICAL: Respond ONLY with valid JSON. Do not include any text before or after the JSON. Do not wrap the JSON in markdown code blocks. Do not include explanatory text.
 
 Respond in this exact JSON format (no additional text, no markdown, just pure JSON):
 {{
-  "score": <recovery probability score 1-10>,
-  "explanation": "<structured explanation with the following sections:\\n\\n1. STRATEGY FIT EVALUATION:\\n   - Strategy Fit Score: <1-10 using scale: 1-3 poor fit, 4-6 moderate fit, 7-8 good fit, 9-10 excellent fit>\\n   - Short Explanation: <2-4 sentences explaining the score>\\n   - Liquidity Assessment: <Evaluation of options liquidity including spreads, open interest, daily volume, and whether liquidity is sufficient for broken-wing butterfly>\\n   - IV Behavior Assessment: <Evaluation of implied volatility including current level, behavior after drops, IV rank if available, and suitability for strategy>\\n   - Mean-Reversion Tendencies: <Analysis of price behavior including frequency of 3-5% moves, tendency to stabilize/mean-revert, historical recovery patterns, and mean-reverting characteristics>\\n   - Red Flags: <Any concerns including upcoming earnings, significant news, volatility spikes, low float, low trading volume, or other factors that could impact the strategy>\\n   - Suitable for Broken-Wing Butterfly: <Yes or No - clear answer on whether this ticker is suitable for a broken-wing butterfly after a 5% drop, with specific reasoning>\\n\\n2. RECOVERY SCORE EXPLANATION:\\n   - Why this recovery score: <explanation of why you gave this specific recovery score>\\n   - Will it recover: <Yes/No and brief reasoning>\\n\\n3. REASON FOR THE FALL:\\n   - <Brief explanation of why the stock fell, based on web search results>"
+  "score": <strategy fit score 1-10>,
+  "explanation": "<structured explanation with the following sections:\\n\\n1. STRATEGY FIT EVALUATION:\\n   - Strategy Fit Score: <1-10 using scale: 1-3 poor fit, 4-6 moderate fit, 7-8 good fit, 9-10 excellent fit>\\n   - Short Explanation: <2-4 sentences explaining the score>\\n   - Liquidity Assessment: <Options liquidity based on spreads, open interest, volume, and whether liquidity supports BWB execution>\\n   - Event Risk: <Whether the drop appears event-driven and how that affects the strategy>\\n   - Mean-Reversion/Bounce Behavior: <Use computed stats if available>\\n\\n2. BOUNCE BEHAVIOR SUMMARY:\\n   - Summarize whether +8% rebounds after 4-5% drops are common or rare (based on provided stats, if any)\\n\\n3. RECENT NEWS SUMMARY:\\n   - Briefly explain the likely reason for the drop from web search, or say no specific reason found\\n\\n4. DATA LIMITATIONS:\\n   - Note missing or insufficient stats/data if applicable>"
 }}
 
 The explanation should be plain text with proper line breaks. Use \\n for newlines within the JSON string. Do not include the JSON structure as part of the explanation text itself."""
@@ -9229,9 +10132,9 @@ The explanation should be plain text with proper line breaks. Use \\n for newlin
             }
             
             payload = {
-                'model': 'claude-3-5-haiku-20241022',  # Updated to support web search
-                'max_tokens': 2000,  # Enough for detailed explanation
-                'tools': [{'type': 'web_search_20250305', 'name': 'web_search'}],  # Enable web search
+                'model': 'claude-3-5-haiku-20241022',
+                'max_tokens': 1200,
+                'tools': [{'type': 'web_search_20250305', 'name': 'web_search'}],
                 'messages': [
                     {
                         'role': 'user',

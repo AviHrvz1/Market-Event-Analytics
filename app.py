@@ -13,7 +13,8 @@ os.environ['CURLOPT_SSL_VERIFYPEER'] = '0'
 os.environ['CURLOPT_SSL_VERIFYHOST'] = '0'
 
 from flask import Flask, render_template, jsonify, Response, stream_with_context, request
-from main import LayoffTracker
+import requests
+from main import LayoffTracker, parse_positions_analytics
 from datetime import datetime, timezone, timedelta
 try:
     from zoneinfo import ZoneInfo
@@ -28,9 +29,45 @@ import io
 import json
 import time
 import copy
+import urllib.parse
 from contextlib import redirect_stdout, redirect_stderr
 from threading import Lock, Thread
 import queue
+from config import (
+    SCHWAB_TOS_API_KEY,
+    SCHWAB_TOS_API_SECRET,
+    SCHWAB_TOS_REFRESH_TOKEN,
+    SCHWAB_TOS_CALLBACK_URL,
+    SCHWAB_TOS_AUTHORIZE_URL,
+    SCHWAB_HEARTBEAT_INTERVAL_HOURS,
+)
+
+# Telegram configuration (from secrets.py so keys stay out of git)
+try:
+    from secrets import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+except ImportError:
+    TELEGRAM_BOT_TOKEN = "your_telegram_bot_token"
+    TELEGRAM_CHAT_ID = "your_telegram_chat_id"
+
+def send_telegram_alert(ticker, strategy_label, net_profit):
+    """Send alert via Telegram when position exceeds threshold"""
+    try:
+        # Get current timestamp
+        now = datetime.now()
+        timestamp = now.strftime("%d %b %Y at %H:%M:%S")
+        
+        message = f"🔔 <b>Profit Alert!</b>\n\n" \
+                  f"<b>Ticker:</b> {ticker}\n" \
+                  f"<b>Strategy:</b> {strategy_label}\n" \
+                  f"<b>Net Profit (if close):</b> {net_profit}\n\n" \
+                  f"<i>Triggered: {timestamp}</i>"
+        
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'HTML'}
+        requests.post(url, json=payload, timeout=10)
+        print(f"[Telegram] Alert sent for {ticker}")
+    except Exception as e:
+        print(f"[Telegram] Failed to send alert: {e}")
 
 # Import yfinance for fallback data
 try:
@@ -81,6 +118,19 @@ except ImportError:
     YFINANCE_AVAILABLE = False
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB upload limit
+
+# Schwab API token cache
+_schwab_token_lock = Lock()
+_schwab_access_token = None
+_schwab_access_token_expires_at = 0
+# Runtime override: when user exchanges auth code in-app, we store the new refresh token here (and in file)
+_schwab_refresh_token_override = None
+
+
+def _get_schwab_refresh_token():
+    """Use runtime override if set, otherwise config (env/file)."""
+    return _schwab_refresh_token_override or SCHWAB_TOS_REFRESH_TOKEN
 
 # Debug log file for events filtering
 DEBUG_LOG_FILE = 'events_filter_debug.log'
@@ -1006,6 +1056,23 @@ def get_bearish_analytics_stream():
         industry = request.args.get('industry', 'All Industries')
         filter_type = request.args.get('filter_type', 'bearish')  # 'bearish' or 'bullish'
         pct_threshold_str = request.args.get('pct_threshold')
+        recovery_threshold = float(request.args.get('recovery_threshold', 6))
+        # CRITICAL DEBUG: Write directly to log file AND print to ensure it's captured
+        import os
+        log_file_path = os.path.join(os.path.dirname(__file__), 'server_output.log')
+        debug_msg = f"[API] Received recovery_threshold={recovery_threshold}% from request\n"
+        # Write to file first (before any redirects)
+        try:
+            with open(log_file_path, 'a', encoding='utf-8') as f:
+                f.write(debug_msg)
+                f.flush()
+                os.fsync(f.fileno())  # Force write to disk
+        except Exception as e:
+            # Write error to original stderr (before redirect)
+            sys.__stderr__.write(f"[ERROR] Failed to write debug to log file: {e}\n")
+            sys.__stderr__.flush()
+        # Also print (goes to LogCapture/SSE stream)
+        print(f"[API] Received recovery_threshold={recovery_threshold}% from request", flush=True)
         flexible_days = int(request.args.get('flexible_days', 0))
         ticker_filter_str = request.args.get('ticker_filter', '').strip()
         
@@ -1051,6 +1118,7 @@ def get_bearish_analytics_stream():
                     industry,
                     filter_type=filter_type,
                     pct_threshold=pct_threshold,
+                    recovery_threshold=recovery_threshold,
                     flexible_days=flexible_days,
                     ticker_filter=ticker_filter_str
                 )
@@ -1466,6 +1534,820 @@ def get_stock_events():
         return jsonify({
             'error': f'Error fetching events: {str(e)}'
         }), 500
+
+
+@app.route('/api/positions-analytics')
+def get_positions_analytics():
+    """API endpoint to parse account statement positions analytics data."""
+    try:
+        csv_path = os.path.join(os.path.dirname(__file__), 'data', 'AccountStatement.csv')
+        if not os.path.exists(csv_path):
+            return jsonify({'error': f'CSV file not found at {csv_path}'}), 404
+
+        result = parse_positions_analytics(csv_path)
+        positions = result.get('positions', [])
+        summary = result.get('summary', {})
+        return jsonify({'positions': positions, 'summary': summary, 'total': len(positions)})
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[POSITIONS ANALYTICS ERROR] {error_trace}")
+        return jsonify({'error': f'Error parsing positions analytics: {str(e)}'}), 500
+
+
+@app.route('/api/positions-analytics/upload', methods=['POST'])
+def upload_positions_analytics():
+    """Upload account statement CSV to replace the stored file."""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided.'}), 400
+        file = request.files['file']
+        if not file or file.filename == '':
+            return jsonify({'error': 'No file selected.'}), 400
+        filename = file.filename.lower()
+        if not filename.endswith('.csv'):
+            return jsonify({'error': 'Only .csv files are supported.'}), 400
+
+        csv_path = os.path.join(os.path.dirname(__file__), 'data', 'AccountStatement.csv')
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+        file.save(csv_path)
+
+        return jsonify({'success': True})
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[POSITIONS ANALYTICS UPLOAD ERROR] {error_trace}")
+        return jsonify({'error': f'Error uploading account statement: {str(e)}'}), 500
+
+
+def _positions_ticker_filter_path():
+    return os.path.join(os.path.dirname(__file__), 'data', 'positions_ticker_filter.json')
+
+
+@app.route('/api/positions-analytics/ticker-filter', methods=['GET'])
+def get_positions_ticker_filter():
+    """Return the saved ticker filter (list of ticker symbols)."""
+    try:
+        path = _positions_ticker_filter_path()
+        if not os.path.exists(path):
+            return jsonify({'tickers': []})
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        tickers = data.get('tickers', [])
+        if not isinstance(tickers, list):
+            tickers = []
+        return jsonify({'tickers': [str(t).strip().upper() for t in tickers if t]})
+    except Exception as e:
+        return jsonify({'tickers': []})
+
+
+@app.route('/api/positions-analytics/ticker-filter', methods=['POST'])
+def save_positions_ticker_filter():
+    """Save the ticker filter (list of ticker symbols) to a file."""
+    try:
+        data = request.get_json(silent=True) or {}
+        tickers = data.get('tickers', [])
+        if not isinstance(tickers, list):
+            tickers = []
+        tickers = [str(t).strip().upper() for t in tickers if t]
+        path = _positions_ticker_filter_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump({'tickers': tickers}, f, indent=2)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def _compute_pl_if_close_from_chain(strategies: list, chain_data: dict, num_details: int, log_ticker: str = None):
+    """
+    Compute P/L if close using bid (long legs) / ask (short legs) from chain.
+    Returns (strategy_results, total_pl_if_close, per_detail).
+    If log_ticker is set, logs per-leg bid/ask and close value for debugging vs TOS.
+    """
+    call_map = chain_data.get('callExpDateMap', {}) or {}
+    put_map = chain_data.get('putExpDateMap', {}) or {}
+
+    def find_exp_key(side_map, expiration_date):
+        for key in side_map.keys():
+            if key.startswith(expiration_date):
+                return key
+        return None
+
+    def get_bid_ask(expiration_date, strike_val, put_call):
+        side_map = put_map if (put_call or '').upper() == 'PUT' else call_map
+        exp_key = find_exp_key(side_map, expiration_date)
+        if not exp_key:
+            return (None, None)
+        strike_dict = side_map.get(exp_key, {})
+        strike_key = None
+        for k in strike_dict.keys():
+            try:
+                if abs(float(k) - float(strike_val)) < 0.01:
+                    strike_key = k
+                    break
+            except (TypeError, ValueError):
+                continue
+        if strike_key is None:
+            return (None, None)
+        contracts = strike_dict.get(strike_key, [])
+        if not contracts:
+            return (None, None)
+        c = contracts[0] if isinstance(contracts[0], dict) else contracts
+        return (c.get('bid'), c.get('ask'))
+
+    total_pl_if_close = 0.0
+    strategy_results = []
+    per_detail = [None] * num_details
+
+    for s in strategies:
+        cost = float(s.get('cost', 0))
+        close_credit_debit = 0.0
+        close_credit_debit_mid = 0.0
+        leg_log = [] if log_ticker else None
+        for leg in s.get('legs', []):
+            exp_date = leg.get('expiration_date')
+            strike_val = leg.get('strike')
+            put_call = (leg.get('put_call') or 'PUT').upper()
+            qty = int(leg.get('qty', 0))
+            bid, ask = get_bid_ask(exp_date, strike_val, put_call)
+            bid = float(bid) if bid is not None else 0.0
+            ask = float(ask) if ask is not None else 0.0
+            mid = (bid + ask) / 2.0 if (bid or ask) else 0.0
+            # When closing: long legs we sell (bid), short legs we buy back (ask).
+            price = bid if qty > 0 else ask
+            contrib = qty * price * 100
+            close_credit_debit += contrib
+            close_credit_debit_mid += qty * mid * 100
+            if leg_log is not None:
+                leg_log.append(f"  {exp_date} {strike_val} {put_call} qty={qty} bid={bid} ask={ask} price_used={price} contrib={contrib:.2f}")
+        if log_ticker and leg_log:
+            print(f"[CLOSE VALUE] {log_ticker} strategy cost={cost} close_before_flip={close_credit_debit:.2f} mid={close_credit_debit_mid:.2f}", flush=True)
+            for line in leg_log:
+                print(f"[CLOSE VALUE] {line}", flush=True)
+        opened_with_bot = s.get('opened_with_bot', False)
+        num_legs = len(s.get('legs', []))
+        # For butterflies (3 legs), the leg-by-leg bid/ask sum can be very unstable.
+        # Use the mid-based sum as the close value so it better matches the single
+        # strategy price (as shown in TOS).
+        if num_legs == 3:
+            close_credit_debit = close_credit_debit_mid
+        # Note: pl_if_close here is still the legacy TOS-style metric based on cost basis,
+        # kept for backwards-compatibility and tests. Real net cash P/L is computed
+        # later in get_positions_close_value using open_cash + adjusted close_cash.
+        pl_if_close = (close_credit_debit + cost) if opened_with_bot else (close_credit_debit - cost)
+        if log_ticker:
+            print(f"[CLOSE VALUE] {log_ticker} strategy final close_credit_debit={close_credit_debit:.2f} pl_if_close={pl_if_close:.2f}", flush=True)
+        total_pl_if_close += pl_if_close
+        idx = s.get('detail_index', len(strategy_results))
+        strategy_results.append({
+            'detail_index': idx,
+            'type': s.get('type', ''),
+            'cost': cost,
+            'close_credit_debit': round(close_credit_debit, 2),
+            'pl_if_close': round(pl_if_close, 2),
+            'opened_with_bot': opened_with_bot
+        })
+        if idx < len(per_detail):
+            per_detail[idx] = {
+                'close_credit_debit': round(close_credit_debit, 2),
+                'pl_if_close': round(pl_if_close, 2),
+                'opened_with_bot': opened_with_bot
+            }
+    return strategy_results, total_pl_if_close, per_detail
+
+
+@app.route('/api/positions-analytics/close-value')
+def get_positions_close_value():
+    """Get close (credit/debit) and P/L if close for an open position by ticker, using Schwab option chain."""
+    try:
+        if not _get_schwab_refresh_token() or not SCHWAB_TOS_API_KEY:
+            return jsonify({
+                'error': 'Schwab token not configured. Add your refresh token to data/schwab_refresh_token.txt (one line, no label) or set SCHWAB_TOS_REFRESH_TOKEN in .env, then restart the app.'
+            }), 200
+        ticker = request.args.get('ticker', '').strip().upper()
+        if not ticker:
+            return jsonify({'error': 'Missing ticker'}), 400
+
+        csv_path = os.path.join(os.path.dirname(__file__), 'data', 'AccountStatement.csv')
+        if not os.path.exists(csv_path):
+            return jsonify({'error': 'Account statement not found'}), 404
+
+        result = parse_positions_analytics(csv_path)
+        positions = result.get('positions', [])
+        position = None
+        for p in positions:
+            if (p.get('ticker') or '').strip().upper() == ticker and p.get('status') == 'Open':
+                position = p
+                break
+        if not position:
+            return jsonify({'error': f'No open position found for {ticker}', 'strategies': [], 'total_pl_if_close': None, 'per_detail': []}), 200
+
+        strategies = position.get('strategies', [])
+        details = position.get('details', [])
+        if not strategies:
+            return jsonify({
+                'ticker': ticker,
+                'strategies': [],
+                'total_pl_if_close': None,
+                'per_detail': [None] * len(details)
+            })
+
+        expirations = set()
+        all_strikes = set()
+        for s in strategies:
+            for leg in s.get('legs', []):
+                ed = leg.get('expiration_date')
+                if ed:
+                    expirations.add(ed)
+                try:
+                    all_strikes.add(float(leg.get('strike', 0)))
+                except (TypeError, ValueError):
+                    pass
+        if not expirations:
+            return jsonify({'ticker': ticker, 'strategies': [], 'total_pl_if_close': None, 'per_detail': [None] * len(details)})
+
+        exp_list = sorted(expirations)
+        from_date = exp_list[0]
+        to_date = exp_list[-1]
+        strike_count = max(50, len(all_strikes) + 20)
+        exp_month = datetime.strptime(from_date, '%Y-%m-%d').strftime('%b').upper()
+
+        chain_params = {
+            'symbol': ticker,
+            'contractType': 'ALL',
+            'strikeCount': strike_count,
+            'includeUnderlyingQuote': 'true',
+            'strategy': 'SINGLE',
+            'range': 'ALL',
+            'expMonth': exp_month,
+            'fromDate': from_date,
+            'toDate': to_date
+        }
+        chain_response = _schwab_api_get('/chains', chain_params)
+        if chain_response.status_code != 200:
+            chain_params.pop('fromDate', None)
+            chain_params.pop('toDate', None)
+            chain_response = _schwab_api_get('/chains', chain_params)
+        if chain_response.status_code != 200:
+            return jsonify({'error': f'Option chain failed: {chain_response.text}'}), 502
+
+        chain_data = chain_response.json()
+        strategy_results, total_pl_if_close, per_detail = _compute_pl_if_close_from_chain(
+            strategies, chain_data, len(details), log_ticker=ticker
+        )
+
+        # Compute real net cash P/L per detail: open cash (detail.amount) + close cash (close_credit_debit).
+        total_pl_if_close_real = None
+        if per_detail and details and len(per_detail) == len(details):
+            total_pl_if_close_real = 0.0
+            for i, detail in enumerate(details):
+                pd = per_detail[i]
+                if pd is None:
+                    continue
+                try:
+                    open_cash = float(detail.get('amount', 0.0))
+                except (TypeError, ValueError):
+                    open_cash = 0.0
+                # close_credit_debit from chain: positive = we receive when closing, negative = we pay.
+                # BOT: we sell to close → receive credit (positive close_val) → close_cash = close_val.
+                # SOLD: we buy to close → pay (negative close_val) → close_cash = close_val (keep sign).
+                try:
+                    close_val = float(pd.get('close_credit_debit', 0.0))
+                except (TypeError, ValueError):
+                    close_val = 0.0
+
+                opened_with_bot = bool(pd.get('opened_with_bot'))
+                close_cash = close_val  # same sign convention for both: positive = credit to us, negative = debit
+                real_net = close_cash + open_cash
+                pd['pl_if_close_real'] = round(real_net, 2)
+                total_pl_if_close_real += real_net
+
+        response = {
+            'ticker': ticker,
+            'strategies': strategy_results,
+            'total_pl_if_close': round(total_pl_if_close, 2),
+            'per_detail': per_detail
+        }
+        if total_pl_if_close_real is not None:
+            response['total_pl_if_close_real'] = round(total_pl_if_close_real, 2)
+        return jsonify(response)
+    except ValueError as e:
+        msg = str(e)
+        if 'access token unavailable' in msg.lower():
+            msg = 'Schwab token not configured. Add your refresh token to data/schwab_refresh_token.txt (one line) or set SCHWAB_TOS_REFRESH_TOKEN in .env, then restart the app.'
+        return jsonify({'error': msg}), 200
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[POSITIONS CLOSE VALUE ERROR] {error_trace}")
+        return jsonify({'error': str(e)}), 500
+
+
+def _schwab_refresh_access_token() -> str:
+    """Refresh Schwab OAuth access token. Raises ValueError with user-friendly message if refresh token is expired/invalid."""
+    refresh_token = _get_schwab_refresh_token()
+    if not SCHWAB_TOS_API_KEY or not SCHWAB_TOS_API_SECRET or not refresh_token:
+        return ''
+    url = 'https://api.schwabapi.com/v1/oauth/token'
+    # Schwab expects application/x-www-form-urlencoded
+    payload = {
+        'grant_type': 'refresh_token',
+        'refresh_token': refresh_token
+    }
+    response = requests.post(
+        url,
+        data=payload,
+        auth=(SCHWAB_TOS_API_KEY, SCHWAB_TOS_API_SECRET),
+        headers={'accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded'},
+        timeout=30
+    )
+    if response.status_code != 200:
+        text = response.text or ''
+        if 'refresh_token_authentication_error' in text or 'unsupported_token_type' in text:
+            raise ValueError(
+                'Schwab refresh token expired or invalid. Re-authenticate at '
+                'https://developer.schwab.com (OAuth flow) to get a new refresh token, '
+                'then set SCHWAB_TOS_REFRESH_TOKEN in your .env or config.'
+            )
+        raise ValueError(f"Schwab token refresh failed: {response.status_code} {response.text}")
+    data = response.json()
+    access_token = data.get('access_token')
+    expires_in = data.get('expires_in', 0)
+    if not access_token:
+        raise ValueError("Schwab token refresh returned no access_token")
+    with _schwab_token_lock:
+        global _schwab_access_token, _schwab_access_token_expires_at
+        _schwab_access_token = access_token
+        _schwab_access_token_expires_at = time.time() + max(0, int(expires_in) - 60)
+    return access_token
+
+
+def _schwab_get_access_token() -> str:
+    with _schwab_token_lock:
+        if _schwab_access_token and time.time() < _schwab_access_token_expires_at:
+            return _schwab_access_token
+    return _schwab_refresh_access_token()
+
+
+def _schwab_api_get(endpoint: str, params: dict) -> requests.Response:
+    access_token = _schwab_get_access_token()
+    if not access_token:
+        raise ValueError("Schwab access token unavailable")
+    url = f"https://api.schwabapi.com/marketdata/v1{endpoint}"
+    headers = {
+        'accept': 'application/json',
+        'Authorization': f"Bearer {access_token}"
+    }
+    response = requests.get(url, params=params, headers=headers, timeout=30)
+    if response.status_code == 401:
+        access_token = _schwab_refresh_access_token()
+        headers['Authorization'] = f"Bearer {access_token}"
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+    return response
+
+
+def _schwab_heartbeat():
+    """Use the Schwab refresh token (get access token + one cheap API call) to keep it active."""
+    if not _get_schwab_refresh_token() or not SCHWAB_TOS_API_KEY:
+        return False, 'No Schwab credentials'
+    try:
+        _schwab_get_access_token()
+        r = _schwab_api_get('/expirationchain', {'symbol': 'SPY'})
+        if r.status_code == 200:
+            return True, 'ok'
+        return False, r.text or f'status {r.status_code}'
+    except Exception as e:
+        return False, str(e)
+
+
+@app.route('/api/system-status')
+def system_status():
+    """
+    Returns { ok: true } or { ok: false, issues: [ { code, title, message, instruction, command } ] }.
+    Used by the frontend to show a popup only when there are setup/connection issues, with instructions.
+    Tunnel unreachable is detected on the client when this request fails (e.g. network error).
+    """
+    issues = []
+    # Schwab token: missing or expired/invalid
+    if not _get_schwab_refresh_token() or not SCHWAB_TOS_API_KEY or not SCHWAB_TOS_API_SECRET:
+        issues.append({
+            'code': 'schwab_token_missing',
+            'title': 'Schwab token not configured',
+            'message': 'Options data and Positions close-value need a valid Schwab refresh token.',
+            'instruction': 'Add your refresh token to data/schwab_refresh_token.txt (one line, token only) or set SCHWAB_TOS_REFRESH_TOKEN in .env, then restart the app.',
+            'command': 'echo "PASTE_YOUR_TOKEN_HERE" > data/schwab_refresh_token.txt'
+        })
+    else:
+        try:
+            _schwab_get_access_token()
+        except ValueError as e:
+            msg = str(e).lower()
+            if 'expired' in msg or 'invalid' in msg or 'refresh_token_authentication_error' in msg or 'unsupported_token_type' in msg:
+                issues.append({
+                    'code': 'schwab_token_expired',
+                    'title': 'Schwab refresh token expired or invalid',
+                    'message': 'The token in data/schwab_refresh_token.txt is no longer valid.',
+                    'instruction': 'Re-authenticate: (1) Ensure the tunnel is running (see tunnel issue below if you cannot reach this app). (2) Open the authorize URL in a browser and log in. (3) Paste the redirect URL into the script. (4) Put the new token in data/schwab_refresh_token.txt and restart the app.',
+                    'command': 'python3 schwab_oauth_get_refresh_token.py',
+                    'authorize_url': SCHWAB_TOS_AUTHORIZE_URL,
+                })
+            else:
+                issues.append({
+                    'code': 'schwab_token_error',
+                    'title': 'Schwab token error',
+                    'message': str(e),
+                    'instruction': 'Check data/schwab_refresh_token.txt and .env. To get a new token, run the OAuth script (tunnel must be up).',
+                    'command': 'python3 schwab_oauth_get_refresh_token.py'
+                })
+        except Exception as e:
+            issues.append({
+                'code': 'schwab_token_error',
+                'title': 'Schwab token error',
+                'message': str(e),
+                'instruction': 'Check your network and Schwab credentials. To get a new token, run the OAuth script (tunnel must be up).',
+                'command': 'python3 schwab_oauth_get_refresh_token.py'
+            })
+    if not issues:
+        return jsonify({'ok': True})
+    return jsonify({'ok': False, 'issues': issues})
+
+
+@app.route('/api/schwab/exchange-code', methods=['POST'])
+def schwab_exchange_code():
+    """
+    Exchange an OAuth authorization code (from the redirect URL) for tokens.
+    Accepts JSON: { "redirect_url": "https://...?code=..." } or { "code": "..." }.
+    Writes the new refresh token to data/schwab_refresh_token.txt and sets the in-memory override
+    so the app can use it immediately without restart.
+    """
+    if not request.is_json:
+        return jsonify({'ok': False, 'error': 'Expect JSON body'}), 400
+    data = request.get_json() or {}
+    redirect_url = (data.get('redirect_url') or '').strip()
+    code = (data.get('code') or '').strip()
+    if redirect_url:
+        parsed = urllib.parse.urlparse(redirect_url)
+        qs = urllib.parse.parse_qs(parsed.query)
+        code = (qs.get('code') or [None])[0]
+        if isinstance(code, list):
+            code = code[0] if code else ''
+        if not code:
+            return jsonify({'ok': False, 'error': 'No "code" found in redirect URL. Paste the full URL from your browser after logging in.'}), 400
+    if not code:
+        return jsonify({'ok': False, 'error': 'Provide "redirect_url" (full URL after login) or "code".'}), 400
+    if not SCHWAB_TOS_API_KEY or not SCHWAB_TOS_API_SECRET or not SCHWAB_TOS_CALLBACK_URL:
+        return jsonify({'ok': False, 'error': 'Server missing Schwab API key, secret, or callback URL.'}), 500
+    url = 'https://api.schwabapi.com/v1/oauth/token'
+    payload = {
+        'grant_type': 'authorization_code',
+        'code': code,
+        'redirect_uri': SCHWAB_TOS_CALLBACK_URL,
+    }
+    try:
+        response = requests.post(
+            url,
+            data=payload,
+            auth=(SCHWAB_TOS_API_KEY, SCHWAB_TOS_API_SECRET),
+            headers={'accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded'},
+            timeout=30
+        )
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 200
+    if response.status_code != 200:
+        text = (response.text or '').strip()
+        return jsonify({'ok': False, 'error': f'Token exchange failed: {response.status_code}. {text}'}), 200
+    try:
+        body = response.json()
+    except Exception:
+        return jsonify({'ok': False, 'error': 'Invalid JSON from Schwab'}), 200
+    refresh_token = body.get('refresh_token')
+    if not refresh_token:
+        return jsonify({'ok': False, 'error': 'No refresh_token in response. You may have used an old or reused code; get a new code by opening the authorize URL again.'}), 200
+    token_path = os.path.join(os.path.dirname(__file__), 'data', 'schwab_refresh_token.txt')
+    try:
+        os.makedirs(os.path.dirname(token_path), exist_ok=True)
+        with open(token_path, 'w') as f:
+            f.write(refresh_token)
+            f.write('\n')
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'Token received but could not write file: {e}'}), 200
+    with _schwab_token_lock:
+        global _schwab_refresh_token_override
+        _schwab_refresh_token_override = refresh_token
+        global _schwab_access_token, _schwab_access_token_expires_at
+        _schwab_access_token = None
+        _schwab_access_token_expires_at = 0
+    return jsonify({'ok': True, 'message': 'Token saved. You can dismiss and retry.'})
+
+
+@app.route('/api/heartbeat/schwab')
+def heartbeat_schwab():
+    """Call this periodically (e.g. daily via cron) to keep the Schwab refresh token active."""
+    ok, msg = _schwab_heartbeat()
+    if ok:
+        return jsonify({'ok': True, 'message': 'Schwab token refreshed'})
+    return jsonify({'ok': False, 'error': msg}), 200
+
+
+def _schwab_heartbeat_loop():
+    """Background thread: run Schwab heartbeat every SCHWAB_HEARTBEAT_INTERVAL_HOURS."""
+    interval_sec = max(3600, int(SCHWAB_HEARTBEAT_INTERVAL_HOURS * 3600))
+    while True:
+        try:
+            ok, msg = _schwab_heartbeat()
+            if ok:
+                print(f"[Schwab heartbeat] OK at {time.strftime('%Y-%m-%d %H:%M')}", flush=True)
+            else:
+                print(f"[Schwab heartbeat] failed: {msg}", flush=True)
+        except Exception as e:
+            print(f"[Schwab heartbeat] error: {e}", flush=True)
+        time.sleep(interval_sec)
+
+
+# Global tracking for monitored tickers (in-memory, lost on restart)
+_monitored_tickers = set()  # Set of ticker symbols
+_monitoring_thread = None
+_monitoring_active = False
+_alert_queue = queue.Queue()
+
+def _monitor_positions_loop():
+    """Background thread that checks monitored tickers every 5 minutes"""
+    global _monitoring_active
+    print("[Monitor] Starting position monitoring loop", flush=True)
+    while _monitoring_active:
+        try:
+            if _monitored_tickers:
+                print(f"[Monitor] Checking {len(_monitored_tickers)} tickers: {list(_monitored_tickers)}", flush=True)
+                for ticker in list(_monitored_tickers):
+                    check_ticker_threshold(ticker)
+            else:
+                print("[Monitor] No tickers to monitor", flush=True)
+        except Exception as e:
+            print(f"[Monitor] Error: {e}", flush=True)
+        
+        # Sleep for 5 minutes (300 seconds)
+        time.sleep(300)
+
+def check_ticker_threshold(ticker):
+    """Check if ticker's open strategies exceed $130 threshold"""
+    try:
+        print(f"[Monitor] Checking {ticker}...", flush=True)
+        
+        # Get position data for this ticker
+        csv_path = os.path.join(os.path.dirname(__file__), 'data', 'AccountStatement.csv')
+        if not os.path.exists(csv_path):
+            print(f"[Monitor] Account statement not found", flush=True)
+            return None
+        
+        result = parse_positions_analytics(csv_path)
+        positions = result.get('positions', [])
+        position = None
+        for p in positions:
+            if (p.get('ticker') or '').strip().upper() == ticker and p.get('status') == 'Open':
+                position = p
+                break
+        
+        if not position:
+            print(f"[Monitor] No open position found for {ticker}", flush=True)
+            return None
+        
+        strategies = position.get('strategies', [])
+        details = position.get('details', [])
+        
+        if not strategies:
+            print(f"[Monitor] No strategies for {ticker}", flush=True)
+            return None
+        
+        # Get option chain data
+        expirations = set()
+        all_strikes = set()
+        for s in strategies:
+            for leg in s.get('legs', []):
+                ed = leg.get('expiration_date')
+                if ed:
+                    expirations.add(ed)
+                try:
+                    all_strikes.add(float(leg.get('strike', 0)))
+                except (TypeError, ValueError):
+                    pass
+        
+        if not expirations:
+            print(f"[Monitor] No expirations for {ticker}", flush=True)
+            return None
+        
+        exp_list = sorted(expirations)
+        from_date = exp_list[0]
+        to_date = exp_list[-1]
+        strike_count = max(50, len(all_strikes) + 20)
+        exp_month = datetime.strptime(from_date, '%Y-%m-%d').strftime('%b').upper()
+        
+        chain_params = {
+            'symbol': ticker,
+            'contractType': 'ALL',
+            'strikeCount': strike_count,
+            'includeUnderlyingQuote': 'true',
+            'strategy': 'SINGLE',
+            'range': 'ALL',
+            'expMonth': exp_month,
+            'fromDate': from_date,
+            'toDate': to_date
+        }
+        
+        chain_response = _schwab_api_get('/chains', chain_params)
+        if chain_response.status_code != 200:
+            chain_params.pop('fromDate', None)
+            chain_params.pop('toDate', None)
+            chain_response = _schwab_api_get('/chains', chain_params)
+        
+        if chain_response.status_code != 200:
+            print(f"[Monitor] Option chain failed for {ticker}", flush=True)
+            return None
+        
+        chain_data = chain_response.json()
+        strategy_results, total_pl_if_close, per_detail = _compute_pl_if_close_from_chain(
+            strategies, chain_data, len(details), log_ticker=ticker
+        )
+        
+        # Check each strategy for threshold
+        strategies_above_threshold = []
+        for strat in strategy_results:
+            net_pl = strat.get('pl_if_close', 0)
+            strat_label = strat.get('label', strat.get('type', 'Strategy'))
+            print(f"[Monitor] {ticker} strategy '{strat_label}' pl_if_close=${net_pl:.2f}", flush=True)
+            if net_pl > 130:
+                print(f"[Monitor] ✓ ABOVE THRESHOLD: {strat_label} = ${net_pl:.2f}", flush=True)
+                strategies_above_threshold.append({
+                    'label': strat_label,
+                    'net_profit': net_pl
+                })
+        
+        if strategies_above_threshold:
+            # Combine all strategies for one alert per ticker
+            combined_label = ', '.join([s['label'] for s in strategies_above_threshold])
+            max_profit = max([s['net_profit'] for s in strategies_above_threshold])
+            
+            print(f"[Monitor] ALERT! {ticker} - {combined_label} - ${max_profit:.2f}", flush=True)
+            
+            # Send Telegram alert (DISABLED)
+            # send_telegram_alert(ticker, combined_label, f"+${max_profit:.2f}")
+            
+            # Push to SSE queue for frontend with timestamp
+            now = datetime.now()
+            timestamp = now.strftime("%d %b %Y at %H:%M:%S")
+            alert_data = {
+                'ticker': ticker,
+                'strategies': combined_label,
+                'net_profit': max_profit,
+                'timestamp': timestamp
+            }
+            _alert_queue.put(alert_data)
+            
+            return alert_data
+        else:
+            print(f"[Monitor] {ticker} - No strategies above $130", flush=True)
+            
+    except Exception as e:
+        print(f"[Monitor] Error checking {ticker}: {e}", flush=True)
+    return None
+
+
+@app.route('/api/options/current-status')
+def get_current_option_status():
+    try:
+        ticker = request.args.get('ticker', '').strip().upper()
+        if not ticker:
+            return jsonify({'error': 'Missing ticker'}), 400
+
+        exp_response = _schwab_api_get('/expirationchain', {'symbol': ticker})
+        if exp_response.status_code != 200:
+            return jsonify({'error': f'Expiration chain failed: {exp_response.text}'}), 502
+        exp_data = exp_response.json()
+        expiration_list = exp_data.get('expirationList') or exp_data.get('ExpirationList') or []
+
+        candidates = []
+        for item in expiration_list:
+            if not isinstance(item, dict):
+                continue
+            exp_date = item.get('expirationDate') or item.get('expiration') or item.get('ExpirationDate')
+            days = item.get('daysToExpiration') or item.get('DaysToExpiration')
+            exp_type = item.get('expirationType') or item.get('ExpirationType')
+            standard = item.get('standard')
+            if not exp_date or days is None:
+                continue
+            is_weekly = (exp_type == 'W') or (standard is False)
+            if days >= 20 and not is_weekly:
+                candidates.append({
+                    'expiration_date': exp_date,
+                    'days_to_expiration': int(days),
+                    'expiration_type': exp_type,
+                    'standard': standard
+                })
+
+        if not candidates:
+            return jsonify({'error': 'No non-weekly expirations with >= 20 DTE found.'}), 404
+
+        selected = sorted(candidates, key=lambda x: x['days_to_expiration'])[0]
+        expiration_date = selected['expiration_date']
+        exp_month = datetime.strptime(expiration_date, '%Y-%m-%d').strftime('%b').upper()
+
+        chain_params = {
+            'symbol': ticker,
+            'contractType': 'ALL',
+            'strikeCount': 10,
+            'includeUnderlyingQuote': 'true',
+            'strategy': 'SINGLE',
+            'range': 'ALL',
+            'expMonth': exp_month,
+            'fromDate': expiration_date,
+            'toDate': expiration_date
+        }
+        chain_response = _schwab_api_get('/chains', chain_params)
+        if chain_response.status_code != 200:
+            chain_params.pop('fromDate', None)
+            chain_params.pop('toDate', None)
+            chain_response = _schwab_api_get('/chains', chain_params)
+
+        if chain_response.status_code != 200:
+            return jsonify({'error': f'Option chain failed: {chain_response.text}'}), 502
+
+        chain_data = chain_response.json()
+        call_map = chain_data.get('callExpDateMap', {})
+        put_map = chain_data.get('putExpDateMap', {})
+
+        exp_key = None
+        for key in call_map.keys():
+            if expiration_date in key:
+                exp_key = key
+                break
+        if not exp_key:
+            for key in put_map.keys():
+                if expiration_date in key:
+                    exp_key = key
+                    break
+        if not exp_key:
+            return jsonify({'error': 'No option chain found for selected expiration.'}), 404
+
+        def _collect_strikes(side_map: dict) -> list:
+            return [float(k) for k in side_map.get(exp_key, {}).keys()]
+
+        strikes = sorted(set(_collect_strikes(call_map) + _collect_strikes(put_map)))
+        if not strikes:
+            return jsonify({'error': 'No strikes available for selected expiration.'}), 404
+
+        underlying_price = chain_data.get('underlyingPrice') or 0
+        closest_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - underlying_price))
+        start = max(0, closest_idx - 5)
+        end = min(len(strikes), start + 10)
+        if end - start < 10:
+            start = max(0, end - 10)
+        selected_strikes = strikes[start:end]
+
+        def _find_contract(side_map: dict, strike_value: float) -> dict:
+            strike_dict = side_map.get(exp_key, {})
+            for strike_key, contracts in strike_dict.items():
+                try:
+                    if float(strike_key) == strike_value and contracts:
+                        return contracts[0]
+                except ValueError:
+                    continue
+            return {}
+
+        rows = []
+        for strike in selected_strikes:
+            call = _find_contract(call_map, strike)
+            put = _find_contract(put_map, strike)
+            rows.append({
+                'strike': strike,
+                'call': {
+                    'open_interest': call.get('openInterest'),
+                    'implied_volatility': call.get('volatility') or call.get('impliedVolatility'),
+                    'bid': call.get('bid'),
+                    'ask': call.get('ask'),
+                    'delta': call.get('delta')
+                },
+                'put': {
+                    'open_interest': put.get('openInterest'),
+                    'implied_volatility': put.get('volatility') or put.get('impliedVolatility'),
+                    'bid': put.get('bid'),
+                    'ask': put.get('ask'),
+                    'delta': put.get('delta')
+                }
+            })
+
+        exp_label = datetime.strptime(expiration_date, '%Y-%m-%d').strftime('%d %b %y').upper()
+        return jsonify({
+            'ticker': ticker,
+            'expiration_date': expiration_date,
+            'expiration_label': exp_label,
+            'days_to_expiration': selected['days_to_expiration'],
+            'rows': rows
+        })
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[CURRENT OPTION STATUS ERROR] {error_trace}")
+        return jsonify({'error': f'Error fetching option chain: {str(e)}'}), 500
 
 def _utc_to_israel_time(utc_dt):
     """Convert UTC datetime to Israel time (IST/IDT)"""
@@ -2302,6 +3184,92 @@ def get_ai_opinion_explanation():
         request.json = data
     return get_ai_opinion()
 
+
+@app.route('/api/debug/recovery-chart-load', methods=['POST'])
+def debug_recovery_chart_load():
+    """Log recovery history chart load failures to server_output.log for debugging."""
+    try:
+        data = request.get_json() or {}
+        ticker = data.get('ticker', '')
+        dropDate = data.get('dropDate', '')
+        reason = data.get('reason', '')
+        detail = data.get('detail', '')
+        msg = f"[RECOVERY CHART 40d] ticker={ticker} dropDate={dropDate} reason={reason} detail={detail}"
+        print(msg, flush=True)
+        import os
+        log_path = os.path.join(os.path.dirname(__file__), 'server_output.log')
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(msg + '\n')
+            f.flush()
+    except Exception:
+        pass
+    return jsonify({'ok': True})
+
+
+@app.route('/api/positions-analytics/monitor/start', methods=['POST'])
+def start_monitoring_ticker():
+    """Start monitoring a ticker"""
+    global _monitoring_thread, _monitoring_active
+    data = request.get_json() or {}
+    ticker = data.get('ticker', '').strip().upper()
+    
+    if not ticker:
+        return jsonify({'error': 'Ticker required'}), 400
+    
+    _monitored_tickers.add(ticker)
+    print(f"[Monitor] Added {ticker} to monitoring list", flush=True)
+    
+    # Start monitoring thread if not already running
+    if not _monitoring_active:
+        _monitoring_active = True
+        _monitoring_thread = Thread(target=_monitor_positions_loop, daemon=True)
+        _monitoring_thread.start()
+        print("[Monitor] Monitoring thread started", flush=True)
+    
+    return jsonify({'ok': True, 'ticker': ticker, 'monitored': list(_monitored_tickers)})
+
+@app.route('/api/positions-analytics/monitor/stop', methods=['POST'])
+def stop_monitoring_ticker():
+    """Stop monitoring a ticker"""
+    data = request.get_json() or {}
+    ticker = data.get('ticker', '').strip().upper()
+    
+    _monitored_tickers.discard(ticker)
+    print(f"[Monitor] Removed {ticker} from monitoring list", flush=True)
+    
+    return jsonify({'ok': True, 'ticker': ticker, 'monitored': list(_monitored_tickers)})
+
+@app.route('/api/positions-analytics/monitor/status')
+def get_monitoring_status():
+    """Get list of currently monitored tickers"""
+    return jsonify({'monitored': list(_monitored_tickers)})
+
+@app.route('/api/positions-analytics/monitor/check', methods=['POST'])
+def manual_check_ticker():
+    """Manually trigger a check for a ticker (for testing)"""
+    data = request.get_json() or {}
+    ticker = data.get('ticker', '').strip().upper()
+    
+    if not ticker:
+        return jsonify({'error': 'Ticker required'}), 400
+    
+    result = check_ticker_threshold(ticker)
+    return jsonify({'ok': True, 'alert': result})
+
+@app.route('/api/positions-analytics/monitor/alerts')
+def monitor_alerts_stream():
+    """Server-Sent Events stream for real-time alerts"""
+    def event_stream():
+        while True:
+            try:
+                alert = _alert_queue.get(timeout=30)
+                yield f"data: {json.dumps(alert)}\n\n"
+            except queue.Empty:
+                yield f": keepalive\n\n"
+    
+    return Response(event_stream(), mimetype='text/event-stream')
+
+
 if __name__ == '__main__':
     # Disable automatic dotenv loading to avoid permission issues
     import os
@@ -2340,6 +3308,12 @@ if __name__ == '__main__':
         if '/api' in rule.rule:
             print(f"  {rule.rule} -> {rule.endpoint} (methods: {rule.methods})")
     print("=" * 60 + "\n")
+    
+    # Start Schwab heartbeat thread (keeps refresh token active every N hours)
+    if SCHWAB_TOS_REFRESH_TOKEN and SCHWAB_TOS_API_KEY:
+        _heartbeat_thread = Thread(target=_schwab_heartbeat_loop, daemon=True)
+        _heartbeat_thread.start()
+        print(f"[Schwab heartbeat] Started (every {SCHWAB_HEARTBEAT_INTERVAL_HOURS}h)")
     
     try:
         app.run(debug=True, host='127.0.0.1', port=8082, use_reloader=False)

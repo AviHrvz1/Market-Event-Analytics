@@ -50,6 +50,16 @@ test_output*.log
 test_output*.txt
 verification_output.txt
 
+# Secrets and keys (keep local only; copy from secrets.py.example and fill in)
+secrets.py
+
+# Data directory (account statements, tokens, ticker filter - keep local only)
+data/
+
+# cloudflared binary (downloaded for tunnel)
+bin/
+cloudflared.log
+
 # Data files
 *.json
 options_verification_results.json
