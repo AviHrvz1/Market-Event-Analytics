@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+<!-- app-version: redirect-schwab-to-setup-page -->
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -91,6 +92,10 @@
             display: block;
         }
 
+        .profit-alert-highlight {
+            background-color: #ffeb3b !important;
+        }
+
         .controls {
             padding: 20px 30px;
             background: #f8f9fa;
@@ -115,6 +120,18 @@
         .positions-ticker-select-wrap .ts-dropdown .option.active {
             background: rgba(102, 126, 234, 0.15);
             color: #667eea;
+        }
+        .positions-ticker-select-wrap .ts-control .item {
+            display: inline-block;
+            margin: 2px 6px 2px 0;
+            padding: 2px 6px;
+            background: #e8ecf7;
+            border-radius: 4px;
+            border: 1px solid #d0d7e8;
+        }
+        .positions-ticker-tag-link {
+            cursor: pointer;
+            display: inline-block;
         }
 
         .stats {
@@ -1925,9 +1942,8 @@
             </div>
             <div class="alert-message" id="system-issues-message"></div>
             <div id="system-issues-auth-block" class="system-issue-block" style="display: none;">
-                <div class="issue-title">Fix token in this page</div>
-                <div class="issue-message">Paste the <strong>full redirect URL</strong> from your browser (after logging in at the authorize link above). The app will exchange it for a new token and save it — no restart needed.</div>
-                <textarea id="system-issues-auth-redirect-url" placeholder="https://api.avi-marketdata.xyz/schwab/callback?code=..." rows="2" style="width: 100%; box-sizing: border-box; padding: 8px; margin: 8px 0; font-family: monospace; font-size: 0.85em;"></textarea>
+                <div id="system-issues-auth-content"></div>
+                <textarea id="system-issues-auth-redirect-url" placeholder="https://.../schwab/callback?code=..." rows="2" style="width: 100%; box-sizing: border-box; padding: 8px; margin: 8px 0; font-family: monospace; font-size: 0.85em;"></textarea>
                 <div class="system-issues-buttons" style="margin-top: 8px;">
                     <button type="button" class="alert-close-btn" id="system-issues-exchange-token-btn">Exchange &amp; save token</button>
                 </div>
@@ -3509,8 +3525,9 @@
             if (e.target === this) closeSystemIssues();
         });
 
-        function showSystemIssues(issues) {
+        function showSystemIssues(issues, data) {
             if (!issues || issues.length === 0) return;
+            data = data || {};
             const overlay = document.getElementById('system-issues-overlay');
             const titleEl = document.getElementById('system-issues-title');
             const messageEl = document.getElementById('system-issues-message');
@@ -3533,20 +3550,53 @@
                 authBlock.style.display = hasSchwabTokenIssue ? 'block' : 'none';
                 if (authInput) authInput.value = '';
                 if (authStatus) authStatus.textContent = '';
+                var authContent = document.getElementById('system-issues-auth-content');
+                var url = data.schwab_authorize_url || (issues.filter(function(i) { return i.authorize_url; })[0] || {}).authorize_url;
+                if (authContent && hasSchwabTokenIssue) {
+                    var step1Html = '<div class="issue-title">Fix token in this page</div>' +
+                        '<div class="issue-message" style="margin-bottom: 10px;"><strong>Step 1 — Link to open:</strong> Go to this link in your browser and log in at Schwab. Then you will be redirected; copy that new URL and paste it in Step 2.</div>';
+                    if (url) {
+                        step1Html += '<div id="system-issues-auth-link-wrap" style="margin-bottom: 14px;">' +
+                            '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener" style="display: inline-block; padding: 12px 20px; background: #0066cc; color: #fff; text-decoration: none; border-radius: 6px; font-weight: bold;">Open this link — Schwab log in</a>' +
+                            '<div style="margin-top: 8px; font-size: 0.85em; color: #888;">Or copy this URL: <input type="text" readonly value="' + escapeHtml(url) + '" style="width: 100%; box-sizing: border-box; padding: 6px; font-size: 0.8em; background: #222; color: #ccc; border: 1px solid #444; border-radius: 4px; margin-top: 4px;" id="system-issues-auth-url-copy" /></div>' +
+                            '</div>';
+                    } else {
+                        step1Html += '<div id="system-issues-auth-link-wrap" style="margin-bottom: 14px;"><span style="color: #e67e22;">Set SCHWAB_TOS_API_KEY and SCHWAB_TOS_API_SECRET in the app environment so the link can appear.</span></div>';
+                    }
+                    step1Html += '<div class="issue-message" style="margin-bottom: 6px;"><strong>Step 2 — Paste result here:</strong> After you log in at the link above, Schwab will redirect you. Copy the <strong>full URL</strong> from your browser\'s address bar and paste it in the box below, then click Exchange &amp; save token.</div>' +
+                        '<div class="issue-message" style="margin-top: 12px; font-size: 0.9em;"><a href="/schwab-setup" target="_blank" rel="noopener" style="color: #0066cc;">Open dedicated Schwab setup page</a> (same steps, always shows the link)</div>';
+                    authContent.innerHTML = step1Html;
+                    var copyInput = document.getElementById('system-issues-auth-url-copy');
+                    if (copyInput) copyInput.onclick = function() { this.select(); document.execCommand('copy'); };
+                }
             }
             listEl.innerHTML = '';
+            var schwabUrl = data.schwab_authorize_url || (issues.filter(function(i) { return i.authorize_url; })[0] || {}).authorize_url;
+            var onlySchwabIssues = issues.length > 0 && issues.every(function(i) { return i.code === 'schwab_token_missing' || i.code === 'schwab_token_expired'; });
+            if (onlySchwabIssues) {
+                listEl.style.display = 'none';
+            } else {
+                listEl.style.display = 'block';
+            }
             issues.forEach(function(issue) {
                 const div = document.createElement('div');
                 div.className = 'system-issue-block';
                 let html = '<div class="issue-title">' + (issue.title || issue.code) + '</div>';
+                if (issue.code === 'schwab_token_missing' || issue.code === 'schwab_token_expired') {
+                    var link = issue.authorize_url || schwabUrl;
+                    if (link) {
+                        html += '<div class="system-issue-link" style="margin: 10px 0;"><a href="' + escapeHtml(link) + '" target="_blank" rel="noopener" style="display: inline-block; padding: 10px 18px; background: #0066cc; color: #fff; text-decoration: none; border-radius: 6px; font-weight: bold;">Open Schwab and log in</a></div>';
+                    } else {
+                        html += '<div class="system-issue-link" style="margin: 10px 0; padding: 10px; background: #fff3cd; border-radius: 6px;">Set <strong>SCHWAB_TOS_API_KEY</strong> and <strong>SCHWAB_TOS_API_SECRET</strong> in the environment (Beanstalk Configuration → Software → Environment properties) so the authorize link can appear.</div>';
+                    }
+                } else if (issue.authorize_url) {
+                    html += '<div class="system-issue-link">Open this URL in a browser: <a href="' + escapeHtml(issue.authorize_url) + '" target="_blank" rel="noopener">' + escapeHtml(issue.authorize_url) + '</a></div>';
+                }
                 if (issue.message) html += '<div class="issue-message">' + escapeHtml(issue.message) + '</div>';
                 if (issue.instruction) html += '<div class="issue-instruction"><strong>What to do:</strong> ' + escapeHtml(issue.instruction) + '</div>';
-                if (issue.command) {
+                if (issue.command && issue.code !== 'schwab_token_missing' && issue.code !== 'schwab_token_expired') {
                     html += '<div class="system-issue-command">' + escapeHtml(issue.command) +
                         ' <button type="button" class="copy-cmd-btn" data-cmd="' + escapeHtml(issue.command) + '">Copy</button></div>';
-                }
-                if (issue.authorize_url) {
-                    html += '<div class="system-issue-link">Open this URL in a browser (tunnel must be up): <a href="' + escapeHtml(issue.authorize_url) + '" target="_blank" rel="noopener">' + escapeHtml(issue.authorize_url) + '</a></div>';
                 }
                 div.innerHTML = html;
                 listEl.appendChild(div);
@@ -3578,8 +3628,15 @@
                         closeSystemIssues();
                         return;
                     }
-                    var issues = (result.data && result.data.issues) ? result.data.issues : [];
-                    if (issues.length) showSystemIssues(issues);
+                    var data = result.data || {};
+                    var issues = data.issues || [];
+                    if (issues.length === 0) return;
+                    var onlySchwab = issues.every(function(i) { return i.code === 'schwab_token_missing' || i.code === 'schwab_token_expired'; });
+                    if (onlySchwab) {
+                        window.location.href = '/schwab-setup';
+                        return;
+                    }
+                    showSystemIssues(issues, data);
                 })
                 .catch(function(err) {
                     showSystemIssues([{
@@ -3815,8 +3872,8 @@
 
         function updateBellIcons() {
             document.querySelectorAll('.bell-icon').forEach(bell => {
-                const ticker = bell.dataset.ticker;
-                if (monitoredTickers.has(ticker)) {
+                const key = (bell.dataset.tickerExpiration || bell.dataset.ticker || '').trim();
+                if (monitoredTickers.has(key)) {
                     bell.textContent = '🔔';
                     bell.classList.add('active');
                 } else {
@@ -3826,32 +3883,33 @@
             });
         }
 
-        function toggleMonitoring(ticker, bellElement) {
-            const isCurrentlyMonitored = monitoredTickers.has(ticker);
+        function toggleMonitoring(key, bellElement) {
+            const isCurrentlyMonitored = monitoredTickers.has(key);
             const endpoint = isCurrentlyMonitored ? 'stop' : 'start';
-            
+            const body = key.indexOf(' (') !== -1 ? { ticker_expiration: key } : { ticker: key };
+
             fetch(`/api/positions-analytics/monitor/${endpoint}`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ticker})
+                body: JSON.stringify(body)
             })
             .then(r => r.json())
             .then(data => {
                 if (data.ok) {
                     if (isCurrentlyMonitored) {
-                        monitoredTickers.delete(ticker);
+                        monitoredTickers.delete(key);
                         bellElement.textContent = '🔕';
                         bellElement.classList.remove('active');
-                        console.log(`[Monitor] Stopped monitoring ${ticker}`);
+                        console.log(`[Monitor] Stopped monitoring ${key}`);
                         if (monitoredTickers.size === 0 && alertEventSource) {
                             alertEventSource.close();
                             alertEventSource = null;
                         }
                     } else {
-                        monitoredTickers.add(ticker);
+                        monitoredTickers.add(key);
                         bellElement.textContent = '🔔';
                         bellElement.classList.add('active');
-                        console.log(`[Monitor] Started monitoring ${ticker}`);
+                        console.log(`[Monitor] Started monitoring ${key}`);
                         startAlertStream();
                     }
                 }
@@ -3870,7 +3928,8 @@
                     try {
                         const alert = JSON.parse(event.data);
                         console.log('[Monitor] Alert received:', alert);
-                        showProfitAlert(alert.ticker, alert.strategies, alert.net_profit, alert.timestamp);
+                        const displayKey = alert.ticker_expiration || alert.ticker;
+                        showProfitAlert(displayKey, alert.strategies, alert.net_profit, alert.timestamp, alert.detail_index);
                     } catch (e) {
                         console.error('[Monitor] Failed to parse alert:', e);
                     }
@@ -3891,7 +3950,7 @@
             };
         }
 
-        function showProfitAlert(ticker, strategies, netProfit, timestamp) {
+        function showProfitAlert(ticker, strategies, netProfit, timestamp, detailIndex) {
             console.log(`[Monitor] Showing toast for ${ticker}: $${netProfit.toFixed(2)}`);
             const timeInfo = timestamp ? `\n\nTriggered: ${timestamp}` : '';
             Toastify({
@@ -3903,44 +3962,71 @@
                 backgroundColor: "linear-gradient(to right, #00b09b, #96c93d)",
                 stopOnFocus: true,
                 onClick: function() {
-                    highlightTickerStrategy(ticker);
+                    highlightTickerStrategy(ticker, strategies, detailIndex);
                 }
             }).showToast();
         }
 
-        function highlightTickerStrategy(ticker) {
-            console.log(`[Monitor] Highlighting ${ticker}`);
-            // Find the ticker row
-            const rows = document.querySelectorAll('[data-ticker]');
-            for (const row of rows) {
-                if (row.dataset.ticker === ticker) {
-                    // Expand the details
+        function highlightTickerStrategy(ticker, strategies, detailIndex) {
+            console.log(`[Monitor] Highlighting ${ticker}`, strategies, detailIndex);
+            const body = document.getElementById('positions-analytics-body');
+            if (!body || !ticker) return;
+            const tickerUpper = String(ticker).trim().toUpperCase();
+            if (!tickerUpper) return;
+
+            // Close all accordions and open only this ticker's
+            openTickerAccordion(ticker);
+
+            // Find the parent row and its details row (match by ticker_expiration or ticker)
+            const isTickerExpiration = ticker.indexOf(' (') !== -1;
+            const parentRows = body.querySelectorAll('tr[data-position-row="parent"]');
+            let detailsRow = null;
+            for (const row of parentRows) {
+                if (row.style.display === 'none') continue;
+                const rowKey = (isTickerExpiration ? (row.dataset.tickerExpiration || '') : (row.dataset.ticker || '')).trim().toUpperCase();
+                if (rowKey === tickerUpper) {
                     const detailsId = row.dataset.detailsId;
-                    const detailsRow = document.getElementById(detailsId);
-                    if (detailsRow && detailsRow.style.display === 'none') {
-                        togglePositionsDetails(detailsId);
-                    }
-                    
-                    // Highlight open strategies in yellow
-                    setTimeout(() => {
-                        const detailsCell = detailsRow.querySelector('td');
-                        if (detailsCell) {
-                            // Find the open strategies section
-                            const openSection = detailsCell.querySelector('[data-open-strategies]');
-                            if (openSection) {
-                                openSection.style.backgroundColor = '#ffeb3b';
-                                openSection.style.transition = 'background-color 2s';
-                                setTimeout(() => {
-                                    openSection.style.backgroundColor = '';
-                                }, 3000);
-                            }
-                        }
-                    }, 100);
-                    
-                    // Scroll to view
-                    row.scrollIntoView({behavior: 'smooth', block: 'center'});
+                    if (detailsId) detailsRow = document.getElementById(detailsId);
                     break;
                 }
+            }
+            if (!detailsRow || detailsRow.style.display === 'none') return;
+
+            // Clear previous highlight from any position row (inside trade-details tables) and parent rows
+            body.querySelectorAll('.profit-alert-highlight').forEach(function (el) {
+                el.classList.remove('profit-alert-highlight');
+            });
+
+            // Find the trade-details table inside the open-strategies section
+            const openSection = detailsRow.querySelector('[data-open-strategies]');
+            const table = openSection ? openSection.querySelector('.positions-trade-details-table') : null;
+            const tbody = table ? table.querySelector('tbody') : null;
+            const detailTrs = tbody ? tbody.querySelectorAll('tr') : [];
+
+            let targetTr = null;
+            if (detailIndex != null && detailIndex !== '' && tbody) {
+                const idx = String(detailIndex);
+                targetTr = tbody.querySelector('tr[data-detail-index="' + idx + '"]');
+            }
+            if (!targetTr && detailTrs.length > 0 && strategies) {
+                const labels = String(strategies).split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+                for (let i = 0; i < detailTrs.length; i++) {
+                    const text = detailTrs[i].textContent || '';
+                    const matches = labels.length > 0 && labels.some(function (label) { return label && text.indexOf(label) !== -1; });
+                    if (matches) {
+                        targetTr = detailTrs[i];
+                        break;
+                    }
+                }
+            }
+            if (!targetTr && detailTrs.length > 0) targetTr = detailTrs[0];
+
+            if (targetTr) {
+                targetTr.classList.add('profit-alert-highlight');
+                targetTr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                setTimeout(function () {
+                    targetTr.classList.remove('profit-alert-highlight');
+                }, 3000);
             }
         }
 
@@ -3948,10 +4034,8 @@
         document.addEventListener('click', (e) => {
             if (e.target.classList.contains('bell-icon')) {
                 e.stopPropagation();
-                const ticker = e.target.dataset.ticker;
-                if (ticker) {
-                    toggleMonitoring(ticker, e.target);
-                }
+                const key = (e.target.dataset.tickerExpiration || e.target.dataset.ticker || '').trim();
+                if (key) toggleMonitoring(key, e.target);
             }
         });
 
@@ -4128,9 +4212,9 @@
                     }
                     const legLabel = detail.leg_type || 'To Open';
                     if (hasClose) {
-                        return `<tr><td style="${tdStyle} color: #555;">${detail.datetime || ''}</td><td style="${tdStyle} color: #2c3e50;">${detail.description || ''}</td><td style="${tdStyle} text-align: right; color: #2c3e50;">${amountText}</td><td style="${tdStyle} text-align: right; color: #2c3e50;">${closeCell}</td><td style="${tdStyle} text-align: right; font-weight: 600;">${plCell}</td><td style="${tdStyle} text-align: left;">${legLabel}</td><td style="${tdStyle} color: #888;">${detail.ref || ''}</td></tr>`;
+                        return `<tr data-detail-index="${i}"><td style="${tdStyle} color: #555;">${detail.datetime || ''}</td><td style="${tdStyle} color: #2c3e50;">${detail.description || ''}</td><td style="${tdStyle} text-align: right; color: #2c3e50;">${amountText}</td><td style="${tdStyle} text-align: right; color: #2c3e50;">${closeCell}</td><td style="${tdStyle} text-align: right; font-weight: 600;">${plCell}</td><td style="${tdStyle} text-align: left;">${legLabel}</td><td style="${tdStyle} color: #888;">${detail.ref || ''}</td></tr>`;
                     }
-                    return `<tr><td style="${tdStyle} color: #555;">${detail.datetime || ''}</td><td style="${tdStyle} color: #2c3e50;">${detail.description || ''}</td><td style="${tdStyle} text-align: right; color: #2c3e50;">${amountText}</td><td style="${tdStyle} text-align: left;">${legLabel}</td><td style="${tdStyle} color: #888;">${detail.ref || ''}</td></tr>`;
+                    return `<tr data-detail-index="${i}"><td style="${tdStyle} color: #555;">${detail.datetime || ''}</td><td style="${tdStyle} color: #2c3e50;">${detail.description || ''}</td><td style="${tdStyle} text-align: right; color: #2c3e50;">${amountText}</td><td style="${tdStyle} text-align: left;">${legLabel}</td><td style="${tdStyle} color: #888;">${detail.ref || ''}</td></tr>`;
                 }).join('');
                 if (hasClose) {
                     detailsTableHtml = '<table class="positions-trade-details-table" style="width: 100%; border-collapse: collapse;"><colgroup><col style="width: 120px;"><col><col style="width: 90px;"><col style="width: 100px;"><col style="width: 95px;"><col style="width: 80px;"><col style="width: 85px;"></colgroup>' + headerCells + '<tbody>' + bodyRows + '</tbody></table>';
@@ -4201,7 +4285,9 @@
             if (loadingEl) loadingEl.style.display = 'block';
             if (errorEl) { errorEl.style.display = 'none'; errorEl.textContent = ''; }
             if (refreshBtn) { refreshBtn.disabled = true; refreshBtn.textContent = 'Updating…'; }
-            fetch('/api/positions-analytics/close-value?ticker=' + encodeURIComponent(ticker))
+            const closeValueUrl = '/api/positions-analytics/close-value?ticker=' + encodeURIComponent(ticker) +
+                (position.ticker_expiration ? '&ticker_expiration=' + encodeURIComponent(position.ticker_expiration) : '');
+            fetch(closeValueUrl)
                 .then(response => response.json())
                 .then(data => {
                     if (loadingEl) loadingEl.style.display = 'none';
@@ -4248,16 +4334,53 @@
             }
         }
 
+        function openTickerAccordion(tickerOrTickerExpiration) {
+            const body = document.getElementById('positions-analytics-body');
+            if (!body || !tickerOrTickerExpiration) return;
+            const value = String(tickerOrTickerExpiration).trim();
+            const valueUpper = value.toUpperCase();
+            if (!valueUpper) return;
+            const isTickerExpiration = value.indexOf(' (') !== -1;
+            // Close all details rows
+            body.querySelectorAll('tr[id^="positions-details-"]').forEach(function (row) {
+                row.style.display = 'none';
+            });
+            const parentRows = body.querySelectorAll('tr[data-position-row="parent"]');
+            for (let i = 0; i < parentRows.length; i++) {
+                const row = parentRows[i];
+                if (row.style.display === 'none') continue;
+                const matches = isTickerExpiration
+                    ? (row.dataset.tickerExpiration || '').toUpperCase() === valueUpper
+                    : (row.dataset.ticker || '').toUpperCase() === valueUpper;
+                if (!matches) continue;
+                const detailsId = row.dataset.detailsId;
+                if (!detailsId) continue;
+                const detailsRow = document.getElementById(detailsId);
+                if (!detailsRow) continue;
+                detailsRow.style.display = 'table-row';
+                const positionIndex = parseInt(detailsRow.dataset.positionIndex, 10);
+                if (!isNaN(positionIndex) && positionsAnalyticsData[positionIndex]) {
+                    const position = positionsAnalyticsData[positionIndex];
+                    const t = (position.ticker || '').trim().toUpperCase();
+                    if (position.status === 'Open' && t && detailsRow.dataset.closeValueLoaded !== 'true') {
+                        const loadingEl = document.getElementById(detailsId + '-close-loading');
+                        if (loadingEl) loadingEl.style.display = 'block';
+                        fetchPositionsCloseValue(t, detailsId, position, positionIndex);
+                    }
+                }
+                return;
+            }
+        }
+
         function populatePositionsTickerOptions(positions) {
             const filterContainer = document.getElementById('positions-analytics-filter');
             const selectEl = document.getElementById('positions-ticker-filter');
             if (!filterContainer || !selectEl) return;
 
-            const tickers = new Set();
+            const tickerExpirations = new Set();
             positions.forEach((position) => {
-                if (position.ticker) {
-                    tickers.add(String(position.ticker).toUpperCase());
-                }
+                const te = position.ticker_expiration || position.ticker;
+                if (te) tickerExpirations.add(String(te));
             });
 
             if (positionsTickerTomSelect) {
@@ -4266,30 +4389,50 @@
             }
 
             selectEl.innerHTML = '';
-            Array.from(tickers).sort().forEach((ticker) => {
+            Array.from(tickerExpirations).sort().forEach((te) => {
                 const option = document.createElement('option');
-                option.value = ticker;
-                option.textContent = ticker;
+                option.value = te;
+                option.textContent = te;
                 selectEl.appendChild(option);
             });
 
-            filterContainer.style.display = tickers.size > 0 ? 'flex' : 'none';
+            filterContainer.style.display = tickerExpirations.size > 0 ? 'flex' : 'none';
 
-            if (tickers.size > 0 && typeof TomSelect !== 'undefined') {
+            if (tickerExpirations.size > 0 && typeof TomSelect !== 'undefined') {
                 positionsTickerTomSelect = new TomSelect('#positions-ticker-filter', {
                     placeholder: 'Search or select tickers...',
-                    maxItems: null
+                    maxItems: null,
+                    render: {
+                        item: function (data, escape) {
+                            var val = (data.value != null ? data.value : '');
+                            var text = (data.text != null ? data.text : val);
+                            return '<span class="positions-ticker-tag-link" data-ticker-expiration="' + escape(String(val)) + '" title="Click to open accordion">' + escape(String(text)) + '</span>';
+                        }
+                    }
                 });
                 positionsTickerTomSelect.on('change', function () {
                     applyPositionsTickerFilter();
                     savePositionsTickerFilterToServer();
                 });
-                // Restore saved filter from server (only tickers that exist in current data)
+                if (filterContainer && !filterContainer.dataset.tickerTagClickBound) {
+                    filterContainer.addEventListener('click', function (e) {
+                        const link = e.target.closest && e.target.closest('.positions-ticker-tag-link');
+                        if (link) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const val = link.getAttribute('data-ticker-expiration');
+                            if (val) openTickerAccordion(val);
+                            return false;
+                        }
+                    }, true);
+                    filterContainer.dataset.tickerTagClickBound = 'true';
+                }
+                // Restore saved filter from server (only values that exist in current data)
                 fetch('/api/positions-analytics/ticker-filter')
                     .then(function (r) { return r.json(); })
                     .then(function (data) {
-                        const saved = (data.tickers || []).map(function (t) { return String(t).trim().toUpperCase(); }).filter(Boolean);
-                        const valid = saved.filter(function (t) { return tickers.has(t); });
+                        const saved = (data.tickers || []).map(function (t) { return String(t).trim(); }).filter(Boolean);
+                        const valid = saved.filter(function (t) { return tickerExpirations.has(t); });
                         if (valid.length && positionsTickerTomSelect) {
                             positionsTickerTomSelect.setValue(valid);
                             applyPositionsTickerFilter();
@@ -4335,10 +4478,10 @@
             }
 
             body.querySelectorAll('tr[data-position-row="parent"]').forEach((row) => {
-                const ticker = (row.dataset.ticker || '').toUpperCase();
+                const tickerExpiration = (row.dataset.tickerExpiration || '').toUpperCase();
                 const detailsId = row.dataset.detailsId;
                 const detailsRow = detailsId ? document.getElementById(detailsId) : null;
-                const shouldShow = selectedTickers.length === 0 || selectedTickers.includes(ticker);
+                const shouldShow = selectedTickers.length === 0 || selectedTickers.includes(tickerExpiration);
 
                 row.style.display = shouldShow ? 'table-row' : 'none';
                 if (detailsRow) {
@@ -4388,8 +4531,8 @@
             let total = 0;
             const byTicker = {};
             positions.forEach(function (position) {
-                const ticker = (position.ticker || '').trim().toUpperCase();
-                if (tickerSet && !tickerSet.has(ticker)) return;
+                const te = (position.ticker_expiration || position.ticker || '').trim().toUpperCase();
+                if (tickerSet && !tickerSet.has(te)) return;
                 const pairs = position.closed_pairs || [];
                 pairs.forEach(function (pair) {
                     const parsed = parseCloseDetailDate(pair.close_detail);
@@ -4397,7 +4540,7 @@
                     if (parsed.year !== targetY || parsed.month !== targetM || parsed.day !== targetD) return;
                     const profit = Number(pair.net_profit) || 0;
                     total += profit;
-                    byTicker[ticker] = (byTicker[ticker] || 0) + profit;
+                    byTicker[te] = (byTicker[te] || 0) + profit;
                 });
             });
             return { total: total, byTicker: byTicker };
@@ -4525,10 +4668,11 @@
                         const statusText = position.status || 'Open';
                         const statusColor = statusText === 'Closed' ? '#27ae60' : (statusText === 'Closed without Open' ? '#7f8c8d' : '#d35400');
                         
-                        // Bell icon for monitoring
-                        const isMonitored = monitoredTickers.has(position.ticker);
+                        // Bell icon for monitoring (key = ticker_expiration or ticker)
+                        const monitorKey = (position.ticker_expiration || position.ticker || '').trim();
+                        const isMonitored = monitoredTickers.has(monitorKey);
                         const bellIcon = statusText === 'Open' ? 
-                            `<span class="bell-icon ${isMonitored ? 'active' : ''}" data-ticker="${position.ticker || ''}" style="cursor: pointer; font-size: 1.2em; user-select: none;">${isMonitored ? '🔔' : '🔕'}</span>` :
+                            `<span class="bell-icon ${isMonitored ? 'active' : ''}" data-ticker="${position.ticker || ''}" data-ticker-expiration="${position.ticker_expiration || ''}" style="cursor: pointer; font-size: 1.2em; user-select: none;">${isMonitored ? '🔔' : '🔕'}</span>` :
                             '<span style="color: #ccc;">—</span>';
 
                         const row = document.createElement('tr');
@@ -4536,9 +4680,10 @@
                         row.dataset.positionRow = 'parent';
                         row.dataset.detailsId = detailsId;
                         row.dataset.ticker = position.ticker || '';
+                        row.dataset.tickerExpiration = position.ticker_expiration || position.ticker || '';
                         row.innerHTML = `
                             <td style="padding: 8px 6px; text-align: left;">${position.open_date || ''}</td>
-                            <td style="padding: 8px 6px; text-align: left;">${position.ticker || ''}</td>
+                            <td style="padding: 8px 6px; text-align: left;">${position.ticker_expiration || position.ticker || ''}</td>
                             <td style="padding: 8px 6px; text-align: right; font-weight: 600;">${plText}</td>
                             <td style="padding: 8px 6px; text-align: center; color: ${statusColor}; font-weight: 600;">${statusText}</td>
                             <td style="padding: 8px 6px; text-align: center; color: #2c3e50;">${position.duration || ''}</td>
@@ -4555,7 +4700,7 @@
                         detailsRow.style.display = 'none';
                         detailsRow.dataset.positionIndex = String(index);
                         detailsRow.innerHTML = `
-                            <td colspan="5" style="padding: 10px 12px; background: #fafafa; border: 5px solid #eee;">
+                            <td colspan="6" style="padding: 10px 12px; background: #fafafa; border: 5px solid #eee;">
                                 ${renderPositionDetailsContent(position, null, detailsId)}
                             </td>
                         `;

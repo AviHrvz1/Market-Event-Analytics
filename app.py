@@ -12,7 +12,7 @@ os.environ['SSL_CERT_FILE'] = ''
 os.environ['CURLOPT_SSL_VERIFYPEER'] = '0'
 os.environ['CURLOPT_SSL_VERIFYHOST'] = '0'
 
-from flask import Flask, render_template, jsonify, Response, stream_with_context, request
+from flask import Flask, render_template, jsonify, Response, stream_with_context, request, make_response
 import requests
 from main import LayoffTracker, parse_positions_analytics
 from datetime import datetime, timezone, timedelta
@@ -42,9 +42,9 @@ from config import (
     SCHWAB_HEARTBEAT_INTERVAL_HOURS,
 )
 
-# Telegram configuration (from secrets.py so keys stay out of git)
+# Telegram configuration (from app_secrets.py so keys stay out of git)
 try:
-    from secrets import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+    from app_secrets import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 except ImportError:
     TELEGRAM_BOT_TOKEN = "your_telegram_bot_token"
     TELEGRAM_CHAT_ID = "your_telegram_chat_id"
@@ -230,12 +230,25 @@ class LogCapture:
 @app.route('/')
 def index():
     """Main page with layoff data table"""
-    return render_template('index.html')
+    resp = make_response(render_template('index.html'))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    return resp
 
 @app.route('/chart')
 def chart():
     """Render TradingView chart page"""
     return render_template('chart.html')
+
+
+@app.route('/schwab-setup')
+def schwab_setup_page():
+    """Dedicated page for Schwab OAuth: Step 1 link + Step 2 paste. No cache; always shows current authorize URL."""
+    resp = make_response(render_template(
+        'schwab_setup.html',
+        authorize_url=SCHWAB_TOS_AUTHORIZE_URL if (SCHWAB_TOS_API_KEY and SCHWAB_TOS_API_SECRET) else ''
+    ))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    return resp
 
 @app.route('/api/pine-script/bearish-date')
 def get_bearish_date_pine_script():
@@ -1725,8 +1738,9 @@ def get_positions_close_value():
             return jsonify({
                 'error': 'Schwab token not configured. Add your refresh token to data/schwab_refresh_token.txt (one line, no label) or set SCHWAB_TOS_REFRESH_TOKEN in .env, then restart the app.'
             }), 200
-        ticker = request.args.get('ticker', '').strip().upper()
-        if not ticker:
+        ticker = (request.args.get('ticker') or '').strip().upper()
+        ticker_expiration = (request.args.get('ticker_expiration') or '').strip()
+        if not ticker and not ticker_expiration:
             return jsonify({'error': 'Missing ticker'}), 400
 
         csv_path = os.path.join(os.path.dirname(__file__), 'data', 'AccountStatement.csv')
@@ -1736,18 +1750,29 @@ def get_positions_close_value():
         result = parse_positions_analytics(csv_path)
         positions = result.get('positions', [])
         position = None
-        for p in positions:
-            if (p.get('ticker') or '').strip().upper() == ticker and p.get('status') == 'Open':
-                position = p
-                break
+        if ticker_expiration:
+            key_upper = ticker_expiration.upper()
+            for p in positions:
+                if p.get('status') != 'Open':
+                    continue
+                if (p.get('ticker_expiration') or '').strip().upper() == key_upper:
+                    position = p
+                    break
+        else:
+            for p in positions:
+                if (p.get('ticker') or '').strip().upper() == ticker and p.get('status') == 'Open':
+                    position = p
+                    break
+        lookup_key = ticker_expiration if ticker_expiration else ticker
         if not position:
-            return jsonify({'error': f'No open position found for {ticker}', 'strategies': [], 'total_pl_if_close': None, 'per_detail': []}), 200
+            return jsonify({'error': f'No open position found for {lookup_key}', 'strategies': [], 'total_pl_if_close': None, 'per_detail': []}), 200
 
         strategies = position.get('strategies', [])
         details = position.get('details', [])
+        base_ticker = (position.get('ticker') or ticker or '').strip().upper()
         if not strategies:
             return jsonify({
-                'ticker': ticker,
+                'ticker': base_ticker,
                 'strategies': [],
                 'total_pl_if_close': None,
                 'per_detail': [None] * len(details)
@@ -1765,7 +1790,7 @@ def get_positions_close_value():
                 except (TypeError, ValueError):
                     pass
         if not expirations:
-            return jsonify({'ticker': ticker, 'strategies': [], 'total_pl_if_close': None, 'per_detail': [None] * len(details)})
+            return jsonify({'ticker': base_ticker, 'strategies': [], 'total_pl_if_close': None, 'per_detail': [None] * len(details)})
 
         exp_list = sorted(expirations)
         from_date = exp_list[0]
@@ -1774,7 +1799,7 @@ def get_positions_close_value():
         exp_month = datetime.strptime(from_date, '%Y-%m-%d').strftime('%b').upper()
 
         chain_params = {
-            'symbol': ticker,
+            'symbol': base_ticker,
             'contractType': 'ALL',
             'strikeCount': strike_count,
             'includeUnderlyingQuote': 'true',
@@ -1794,7 +1819,7 @@ def get_positions_close_value():
 
         chain_data = chain_response.json()
         strategy_results, total_pl_if_close, per_detail = _compute_pl_if_close_from_chain(
-            strategies, chain_data, len(details), log_ticker=ticker
+            strategies, chain_data, len(details), log_ticker=base_ticker
         )
 
         # Compute real net cash P/L per detail: open cash (detail.amount) + close cash (close_credit_debit).
@@ -1824,7 +1849,7 @@ def get_positions_close_value():
                 total_pl_if_close_real += real_net
 
         response = {
-            'ticker': ticker,
+            'ticker': base_ticker,
             'strategies': strategy_results,
             'total_pl_if_close': round(total_pl_if_close, 2),
             'per_detail': per_detail
@@ -1935,8 +1960,8 @@ def system_status():
             'code': 'schwab_token_missing',
             'title': 'Schwab token not configured',
             'message': 'Options data and Positions close-value need a valid Schwab refresh token.',
-            'instruction': 'Add your refresh token to data/schwab_refresh_token.txt (one line, token only) or set SCHWAB_TOS_REFRESH_TOKEN in .env, then restart the app.',
-            'command': 'echo "PASTE_YOUR_TOKEN_HERE" > data/schwab_refresh_token.txt'
+            'instruction': 'Use Step 1 (open the link) to log in at Schwab, then paste the full redirect URL from your browser into the box in Step 2 and click "Exchange & save token".',
+            'authorize_url': SCHWAB_TOS_AUTHORIZE_URL,
         })
     else:
         try:
@@ -1947,9 +1972,8 @@ def system_status():
                 issues.append({
                     'code': 'schwab_token_expired',
                     'title': 'Schwab refresh token expired or invalid',
-                    'message': 'The token in data/schwab_refresh_token.txt is no longer valid.',
-                    'instruction': 'Re-authenticate: (1) Ensure the tunnel is running (see tunnel issue below if you cannot reach this app). (2) Open the authorize URL in a browser and log in. (3) Paste the redirect URL into the script. (4) Put the new token in data/schwab_refresh_token.txt and restart the app.',
-                    'command': 'python3 schwab_oauth_get_refresh_token.py',
+                    'message': 'The token is no longer valid.',
+                    'instruction': 'Use Step 1 (open the link) to log in at Schwab, then paste the full redirect URL from your browser into the box in Step 2 and click "Exchange & save token".',
                     'authorize_url': SCHWAB_TOS_AUTHORIZE_URL,
                 })
             else:
@@ -1970,7 +1994,12 @@ def system_status():
             })
     if not issues:
         return jsonify({'ok': True})
-    return jsonify({'ok': False, 'issues': issues})
+    # Always include authorize URL when there's a Schwab issue so the modal can show the link
+    has_schwab = any(i.get('code', '').startswith('schwab_token') for i in issues)
+    payload = {'ok': False, 'issues': issues}
+    if has_schwab and SCHWAB_TOS_AUTHORIZE_URL:
+        payload['schwab_authorize_url'] = SCHWAB_TOS_AUTHORIZE_URL
+    return jsonify(payload)
 
 
 @app.route('/api/schwab/exchange-code', methods=['POST'])
@@ -2089,37 +2118,70 @@ def _monitor_positions_loop():
         # Sleep for 5 minutes (300 seconds)
         time.sleep(300)
 
-def check_ticker_threshold(ticker):
-    """Check if ticker's open strategies exceed $130 threshold"""
+
+def _strategy_label_from_position(position, detail_index):
+    """Build a short label for a strategy from position['strategies'] by detail_index (e.g. '140/145/150 CALL BUTTERFLY')."""
+    strategies = position.get('strategies', [])
+    for s in strategies:
+        if s.get('detail_index') == detail_index:
+            legs = s.get('legs', [])
+            strikes = []
+            put_call = ''
+            for leg in legs:
+                try:
+                    strikes.append(float(leg.get('strike', 0)))
+                except (TypeError, ValueError):
+                    pass
+                if leg.get('put_call'):
+                    put_call = (leg.get('put_call') or '').upper()
+            if strikes:
+                strikes_str = '/'.join(str(int(s)) if s == int(s) else str(s) for s in sorted(strikes))
+                return f"{strikes_str} {put_call or '?'} BUTTERFLY"
+            return f"BUTTERFLY {detail_index}"
+    return f"BUTTERFLY {detail_index}"
+
+
+def check_ticker_threshold(key):
+    """Check if ticker (or ticker_expiration) open strategies exceed $130 threshold. key is ticker or 'TICKER (EXP)'."""
     try:
-        print(f"[Monitor] Checking {ticker}...", flush=True)
-        
-        # Get position data for this ticker
+        print(f"[Monitor] Checking {key}...", flush=True)
+
         csv_path = os.path.join(os.path.dirname(__file__), 'data', 'AccountStatement.csv')
         if not os.path.exists(csv_path):
             print(f"[Monitor] Account statement not found", flush=True)
             return None
-        
+
         result = parse_positions_analytics(csv_path)
         positions = result.get('positions', [])
         position = None
+        key_upper = key.upper()
+        is_ticker_expiration = ' (' in key
         for p in positions:
-            if (p.get('ticker') or '').strip().upper() == ticker and p.get('status') == 'Open':
-                position = p
-                break
-        
+            if p.get('status') != 'Open':
+                continue
+            if is_ticker_expiration:
+                te = (p.get('ticker_expiration') or '').strip().upper()
+                if te == key_upper:
+                    position = p
+                    break
+            else:
+                if (p.get('ticker') or '').strip().upper() == key_upper:
+                    position = p
+                    break
+
         if not position:
-            print(f"[Monitor] No open position found for {ticker}", flush=True)
+            print(f"[Monitor] No open position found for {key}", flush=True)
             return None
-        
+
+        ticker = (position.get('ticker') or '').strip().upper()
         strategies = position.get('strategies', [])
         details = position.get('details', [])
-        
+
         if not strategies:
-            print(f"[Monitor] No strategies for {ticker}", flush=True)
+            print(f"[Monitor] No strategies for {key}", flush=True)
             return None
-        
-        # Get option chain data
+
+        # Get option chain data (use base ticker symbol)
         expirations = set()
         all_strikes = set()
         for s in strategies:
@@ -2131,17 +2193,17 @@ def check_ticker_threshold(ticker):
                     all_strikes.add(float(leg.get('strike', 0)))
                 except (TypeError, ValueError):
                     pass
-        
+
         if not expirations:
-            print(f"[Monitor] No expirations for {ticker}", flush=True)
+            print(f"[Monitor] No expirations for {key}", flush=True)
             return None
-        
+
         exp_list = sorted(expirations)
         from_date = exp_list[0]
         to_date = exp_list[-1]
         strike_count = max(50, len(all_strikes) + 20)
         exp_month = datetime.strptime(from_date, '%Y-%m-%d').strftime('%b').upper()
-        
+
         chain_params = {
             'symbol': ticker,
             'contractType': 'ALL',
@@ -2161,54 +2223,56 @@ def check_ticker_threshold(ticker):
             chain_response = _schwab_api_get('/chains', chain_params)
         
         if chain_response.status_code != 200:
-            print(f"[Monitor] Option chain failed for {ticker}", flush=True)
+            print(f"[Monitor] Option chain failed for {key}", flush=True)
             return None
-        
+
         chain_data = chain_response.json()
         strategy_results, total_pl_if_close, per_detail = _compute_pl_if_close_from_chain(
             strategies, chain_data, len(details), log_ticker=ticker
         )
-        
-        # Check each strategy for threshold
+
+        # Only butterflies above threshold get alerts; one alert per butterfly
         strategies_above_threshold = []
         for strat in strategy_results:
+            if (strat.get('type') or '').upper() != 'BUTTERFLY':
+                continue
             net_pl = strat.get('pl_if_close', 0)
-            strat_label = strat.get('label', strat.get('type', 'Strategy'))
-            print(f"[Monitor] {ticker} strategy '{strat_label}' pl_if_close=${net_pl:.2f}", flush=True)
+            detail_index = strat.get('detail_index', len(strategies_above_threshold))
+            strat_label = _strategy_label_from_position(position, detail_index)
+            print(f"[Monitor] {key} strategy '{strat_label}' pl_if_close=${net_pl:.2f}", flush=True)
             if net_pl > 130:
                 print(f"[Monitor] ✓ ABOVE THRESHOLD: {strat_label} = ${net_pl:.2f}", flush=True)
                 strategies_above_threshold.append({
                     'label': strat_label,
-                    'net_profit': net_pl
+                    'net_profit': net_pl,
+                    'detail_index': detail_index
                 })
-        
-        if strategies_above_threshold:
-            # Combine all strategies for one alert per ticker
-            combined_label = ', '.join([s['label'] for s in strategies_above_threshold])
-            max_profit = max([s['net_profit'] for s in strategies_above_threshold])
-            
-            print(f"[Monitor] ALERT! {ticker} - {combined_label} - ${max_profit:.2f}", flush=True)
-            
-            # Send Telegram alert (DISABLED)
-            # send_telegram_alert(ticker, combined_label, f"+${max_profit:.2f}")
-            
-            # Push to SSE queue for frontend with timestamp
-            now = datetime.now()
-            timestamp = now.strftime("%d %b %Y at %H:%M:%S")
+
+        now = datetime.now()
+        timestamp = now.strftime("%d %b %Y at %H:%M:%S")
+        first_alert = None
+        for s in strategies_above_threshold:
+            print(f"[Monitor] ALERT! {key} - {s['label']} - ${s['net_profit']:.2f}", flush=True)
             alert_data = {
-                'ticker': ticker,
-                'strategies': combined_label,
-                'net_profit': max_profit,
-                'timestamp': timestamp
+                'ticker': key,
+                'strategies': s['label'],
+                'net_profit': s['net_profit'],
+                'timestamp': timestamp,
+                'detail_index': s['detail_index']
             }
+            if is_ticker_expiration:
+                alert_data['ticker_expiration'] = key
             _alert_queue.put(alert_data)
-            
-            return alert_data
+            if first_alert is None:
+                first_alert = alert_data
+
+        if first_alert is not None:
+            return first_alert
         else:
-            print(f"[Monitor] {ticker} - No strategies above $130", flush=True)
-            
+            print(f"[Monitor] {key} - No butterfly strategies above $130", flush=True)
+
     except Exception as e:
-        print(f"[Monitor] Error checking {ticker}: {e}", flush=True)
+        print(f"[Monitor] Error checking {key}: {e}", flush=True)
     return None
 
 
@@ -2994,9 +3058,9 @@ def get_ai_opinion():
                 })
         else:
             # Check if API key is the issue
-            if not tracker.claude_api_key or tracker.claude_api_key == 'sk-ant-api03-YourActualClaudeAPIKeyHere-ReplaceThisWithYourRealKey':
+            if not tracker.claude_api_key:
                 return jsonify({
-                    'error': 'AI opinion not configured. Please update CLAUDE_API_KEY in config.py with your actual API key.'
+                    'error': 'AI opinion not configured. Set CLAUDE_API_KEY in .env or app_secrets.'
                 }), 500
             
             # Provide more specific error message
@@ -3208,36 +3272,41 @@ def debug_recovery_chart_load():
 
 @app.route('/api/positions-analytics/monitor/start', methods=['POST'])
 def start_monitoring_ticker():
-    """Start monitoring a ticker"""
+    """Start monitoring a ticker or (ticker, expiration)"""
     global _monitoring_thread, _monitoring_active
     data = request.get_json() or {}
-    ticker = data.get('ticker', '').strip().upper()
-    
-    if not ticker:
-        return jsonify({'error': 'Ticker required'}), 400
-    
-    _monitored_tickers.add(ticker)
-    print(f"[Monitor] Added {ticker} to monitoring list", flush=True)
-    
+    ticker_expiration = (data.get('ticker_expiration') or '').strip()
+    ticker = (data.get('ticker') or '').strip().upper()
+    key = ticker_expiration.upper() if ticker_expiration else ticker
+
+    if not key:
+        return jsonify({'error': 'Ticker or ticker_expiration required'}), 400
+
+    _monitored_tickers.add(key)
+    print(f"[Monitor] Added {key} to monitoring list", flush=True)
+
     # Start monitoring thread if not already running
     if not _monitoring_active:
         _monitoring_active = True
         _monitoring_thread = Thread(target=_monitor_positions_loop, daemon=True)
         _monitoring_thread.start()
         print("[Monitor] Monitoring thread started", flush=True)
-    
-    return jsonify({'ok': True, 'ticker': ticker, 'monitored': list(_monitored_tickers)})
+
+    return jsonify({'ok': True, 'ticker': key, 'monitored': list(_monitored_tickers)})
 
 @app.route('/api/positions-analytics/monitor/stop', methods=['POST'])
 def stop_monitoring_ticker():
-    """Stop monitoring a ticker"""
+    """Stop monitoring a ticker or (ticker, expiration)"""
     data = request.get_json() or {}
-    ticker = data.get('ticker', '').strip().upper()
-    
-    _monitored_tickers.discard(ticker)
-    print(f"[Monitor] Removed {ticker} from monitoring list", flush=True)
-    
-    return jsonify({'ok': True, 'ticker': ticker, 'monitored': list(_monitored_tickers)})
+    ticker_expiration = (data.get('ticker_expiration') or '').strip()
+    ticker = (data.get('ticker') or '').strip().upper()
+    key = ticker_expiration.upper() if ticker_expiration else ticker
+
+    _monitored_tickers.discard(key)
+    if key:
+        print(f"[Monitor] Removed {key} from monitoring list", flush=True)
+
+    return jsonify({'ok': True, 'ticker': key, 'monitored': list(_monitored_tickers)})
 
 @app.route('/api/positions-analytics/monitor/status')
 def get_monitoring_status():
