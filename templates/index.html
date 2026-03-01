@@ -4775,9 +4775,10 @@
                     }
 
                     const positions = Array.isArray(data.positions) ? data.positions : [];
+                    const displayFilename = data.filename || 'AccountStatement.csv';
                     if (positions.length === 0) {
                         status.textContent = 'No positions found.';
-                        if (uploadStatus) uploadStatus.textContent = 'AccountStatement.csv (no positions)';
+                        if (uploadStatus) uploadStatus.textContent = displayFilename + ' (no positions)';
                         if (positionsUploadInProgress && uploadStatus) {
                             uploadStatus.textContent = 'Upload complete. No positions found.';
                             positionsUploadInProgress = false;
@@ -4846,13 +4847,13 @@
                     positionsAnalyticsLoaded = true;
                     status.textContent = `Loaded ${positions.length} positions. Click a row to expand.`;
                     table.style.display = 'table';
-                    if (uploadStatus) uploadStatus.textContent = 'AccountStatement.csv';
+                    if (uploadStatus) uploadStatus.textContent = displayFilename;
                     if (positionsUploadInProgress && uploadStatus) {
                         uploadStatus.textContent = 'Upload complete.';
                         positionsUploadInProgress = false;
                         setTimeout(() => {
                             if (uploadStatus && uploadStatus.textContent === 'Upload complete.') {
-                                uploadStatus.textContent = 'AccountStatement.csv';
+                                uploadStatus.textContent = displayFilename;
                             }
                         }, 2000);
                     }

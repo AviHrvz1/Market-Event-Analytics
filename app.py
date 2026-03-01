@@ -1605,7 +1605,16 @@ def get_positions_analytics():
         result = parse_positions_analytics(csv_path)
         positions = result.get('positions', [])
         summary = result.get('summary', {})
-        return jsonify({'positions': positions, 'summary': summary, 'total': len(positions)})
+        filename = 'AccountStatement.csv'
+        upload_info_path = os.path.join(_get_data_dir(), 'positions_upload_info.json')
+        if os.path.exists(upload_info_path):
+            try:
+                with open(upload_info_path, 'r', encoding='utf-8') as f:
+                    info = json.load(f)
+                    filename = info.get('original_filename', filename)
+            except Exception:
+                pass
+        return jsonify({'positions': positions, 'summary': summary, 'total': len(positions), 'filename': filename})
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
@@ -1627,10 +1636,18 @@ def upload_positions_analytics():
             return jsonify({'error': 'Only .csv files are supported.'}), 400
 
         csv_path = os.path.join(_get_data_dir(), 'AccountStatement.csv')
-        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+        data_dir = _get_data_dir()
+        os.makedirs(data_dir, exist_ok=True)
         file.save(csv_path)
-
-        return jsonify({'success': True})
+        # Store original filename for display
+        original_name = file.filename or 'AccountStatement.csv'
+        upload_info_path = os.path.join(data_dir, 'positions_upload_info.json')
+        try:
+            with open(upload_info_path, 'w', encoding='utf-8') as f:
+                json.dump({'original_filename': original_name}, f)
+        except Exception:
+            pass
+        return jsonify({'success': True, 'filename': original_name})
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
