@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png?v=8">
+    <link rel="shortcut icon" href="/favicon.ico?v=8">
     <title>Schwab sign-in — completing</title>
     <style>
         body { font-family: system-ui, sans-serif; max-width: 520px; margin: 40px auto; padding: 0 20px; background: #1a1a2e; color: #e0e0e0; }
@@ -27,11 +29,31 @@
             var statusEl = document.getElementById('status');
             var resultEl = document.getElementById('result');
 
-            function showResult(ok, message, showCopyUrl) {
+            function showResult(ok, message, showCopyUrl, persistCommand) {
                 statusEl.className = 'status ' + (ok ? 'ok' : 'error');
                 statusEl.textContent = ok ? 'Done' : 'Something went wrong';
-                resultEl.innerHTML = '<p>' + message + '</p>' +
-                    (showCopyUrl ? '<div class="copy-url"><label>Or copy this URL and paste it in the app’s Step 2 box:</label><input type="text" readonly id="copy-input"></div>' : '') +
+                var html = '<p>' + message + '</p>';
+                if (persistCommand) {
+                    html += '<div class="copy-url" style="margin-top:12px;"><label>To keep token on EB (run once from terminal):</label><input type="text" readonly id="persist-input" style="margin-top:6px;"></input><button type="button" id="copy-persist-btn" style="margin-top:6px;padding:6px 12px;background:#0066cc;color:#fff;border:none;border-radius:4px;cursor:pointer;">Copy command</button></div>';
+                }
+                if (showCopyUrl) {
+                    html += '<div class="copy-url"><label>Or copy this URL and paste it in the app\'s Step 2 box:</label><input type="text" readonly id="copy-input"></div>';
+                }
+                html += '<a href="/" class="app-link">Back to app</a>';
+                resultEl.innerHTML = html;
+                if (persistCommand) {
+                    var persistInput = resultEl.querySelector('#persist-input');
+                    var copyBtn = resultEl.querySelector('#copy-persist-btn');
+                    if (persistInput) persistInput.value = persistCommand;
+                    if (copyBtn) copyBtn.onclick = function() {
+                        navigator.clipboard.writeText(persistCommand).then(function() { copyBtn.textContent = 'Copied!'; });
+                    };
+                }
+                if (showCopyUrl) {
+                    var copyInput = resultEl.querySelector('#copy-input');
+                    if (copyInput) { copyInput.value = redirectUrl; copyInput.onclick = function() { this.select(); document.execCommand('copy'); }; }
+                }
+                /* REMOVED: (showCopyUrl ? '<div class="copy-url"><label>Or copy this URL and paste it in the app’s Step 2 box:</label><input type="text" readonly id="copy-input"></div>' : '') +
                     '<a href="/" class="app-link">Back to app</a>';
                 if (showCopyUrl) {
                     var copyInput = resultEl.querySelector('#copy-input');
@@ -48,7 +70,7 @@
             .then(function(result) {
                 var data = result.data || {};
                 if (result.ok && data.ok) {
-                    showResult(true, 'Token saved. You can return to the app.');
+                    showResult(true, 'Token saved. You can return to the app.', false, data.persist_command);
                 } else {
                     showResult(false, (data.error || 'Exchange failed.') + ' You can copy the URL below and paste it in the app’s Schwab setup page.', true);
                 }

@@ -1,6 +1,6 @@
-# Layoff Tracker
+# Market Event Analytics
 
-Tracks layoff announcements from publicly traded companies over the last 60 days.
+Tracks market events and layoff announcements from publicly traded companies.
 
 ## Features
 

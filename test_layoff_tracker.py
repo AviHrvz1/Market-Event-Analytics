@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit tests for Layoff Tracker
+Unit tests for Market Event Analytics
 """
 
 import unittest

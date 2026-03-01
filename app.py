@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Flask Web Application for Layoff Tracker
+Flask Web Application for Market Event Analytics
 """
 
 import os
@@ -12,7 +12,7 @@ os.environ['SSL_CERT_FILE'] = ''
 os.environ['CURLOPT_SSL_VERIFYPEER'] = '0'
 os.environ['CURLOPT_SSL_VERIFYHOST'] = '0'
 
-from flask import Flask, render_template, jsonify, Response, stream_with_context, request, make_response
+from flask import Flask, render_template, jsonify, Response, stream_with_context, request, make_response, send_from_directory
 import requests
 from main import LayoffTracker, parse_positions_analytics
 from datetime import datetime, timezone, timedelta
@@ -119,6 +119,13 @@ except ImportError:
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB upload limit
+
+
+@app.route('/favicon.ico')
+def favicon():
+    """Serve favicon for browser tab icon (many browsers request this URL by default)."""
+    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
+    return send_from_directory(static_dir, 'favicon.ico', mimetype='image/x-icon')
 
 # Schwab API token cache
 _schwab_token_lock = Lock()
@@ -231,7 +238,9 @@ class LogCapture:
 def index():
     """Main page with layoff data table"""
     resp = make_response(render_template('index.html'))
-    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
     return resp
 
 @app.route('/chart')
@@ -2098,7 +2107,9 @@ def schwab_exchange_code():
         global _schwab_access_token, _schwab_access_token_expires_at
         _schwab_access_token = None
         _schwab_access_token_expires_at = 0
-    return jsonify({'ok': True, 'message': 'Token saved. You can dismiss and retry.'})
+    # On EB, data/ is not deployed; token is lost on restart. Return command to persist via env.
+    persist_cmd = f'eb setenv SCHWAB_TOS_REFRESH_TOKEN={refresh_token}'
+    return jsonify({'ok': True, 'message': 'Token saved.', 'persist_command': persist_cmd})
 
 
 @app.route('/api/heartbeat/schwab')

@@ -73,8 +73,8 @@ Ensure your custom domain (e.g. Cloudflare Tunnel or CNAME) points to the same B
 2. **Create the environment** (once). For **Free Tier** (no extra cost), create with **t3.micro** via AWS CLI so the instance type is applied from the start:
    ```bash
    aws elasticbeanstalk create-environment \
-     --application-name layoff-tracker \
-     --environment-name layoff-tracker-prod \
+--application-name layoff-tracker \
+    --environment-name layoff-tracker-prod \
      --solution-stack-name "64bit Amazon Linux 2023 v4.10.0 running Python 3.9" \
      --option-settings file://.elasticbeanstalk/options-t3micro.json \
      --region us-east-1

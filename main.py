@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Layoff Tracker - Tracks layoff announcements from publicly traded companies
+Market Event Analytics - Tracks market events and layoff announcements from publicly traded companies
 """
 
 import requests

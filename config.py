@@ -26,8 +26,8 @@ NEWS_API_EVERYTHING_URL = 'https://newsapi.org/v2/everything'
 NEWS_API_HEADLINES_URL = 'https://newsapi.org/v2/top-headlines'
 NEWSAPI_MAX_LOOKBACK_DAYS = 30  # NewsAPI historical cap on free/business plans
 
-# Prixe.io Stock Price API configuration (set PRIXE_API_KEY in .env or app_secrets)
-PRIXE_API_KEY = os.getenv('PRIXE_API_KEY') or _PRIXE_API_KEY or ''
+# Prixe.io Stock Price API configuration (set PRIXE_API_KEY in .env or app_secrets; fallback for EB)
+PRIXE_API_KEY = os.getenv('PRIXE_API_KEY') or _PRIXE_API_KEY or 'pro_82da3ed00b82b730c5ce36826a555899703a7841ba96dab8fa9b2f094171447e'
 PRIXE_BASE_URL = 'https://api.prixe.io'
 # Prixe.io API endpoints - if /api/price doesn't work, try /api/historical or check Prixe.io documentation
 PRIXE_PRICE_ENDPOINT = os.getenv('PRIXE_PRICE_ENDPOINT', '/api/price')
