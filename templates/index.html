@@ -4760,11 +4760,13 @@
                 uploadButton.dataset.bound = 'true';
             }
             status.textContent = 'Loading positions...';
+            if (uploadStatus && !positionsUploadInProgress) uploadStatus.textContent = 'Loading...';
             fetch('/api/positions-analytics')
                 .then(response => response.json())
                 .then(data => {
                     if (data.error) {
                         status.textContent = data.error;
+                        if (uploadStatus) uploadStatus.textContent = 'No file selected.';
                         if (positionsUploadInProgress && uploadStatus) {
                             uploadStatus.textContent = `Upload reloading failed: ${data.error}`;
                             positionsUploadInProgress = false;
@@ -4775,6 +4777,7 @@
                     const positions = Array.isArray(data.positions) ? data.positions : [];
                     if (positions.length === 0) {
                         status.textContent = 'No positions found.';
+                        if (uploadStatus) uploadStatus.textContent = 'AccountStatement.csv (no positions)';
                         if (positionsUploadInProgress && uploadStatus) {
                             uploadStatus.textContent = 'Upload complete. No positions found.';
                             positionsUploadInProgress = false;
@@ -4843,14 +4846,15 @@
                     positionsAnalyticsLoaded = true;
                     status.textContent = `Loaded ${positions.length} positions. Click a row to expand.`;
                     table.style.display = 'table';
+                    if (uploadStatus) uploadStatus.textContent = 'AccountStatement.csv';
                     if (positionsUploadInProgress && uploadStatus) {
                         uploadStatus.textContent = 'Upload complete.';
                         positionsUploadInProgress = false;
                         setTimeout(() => {
-                            if (uploadStatus.textContent === 'Upload complete.') {
-                                uploadStatus.textContent = '';
+                            if (uploadStatus && uploadStatus.textContent === 'Upload complete.') {
+                                uploadStatus.textContent = 'AccountStatement.csv';
                             }
-                        }, 3000);
+                        }, 2000);
                     }
 
                     if (tickerSelect && !tickerSelect.dataset.bound) {
