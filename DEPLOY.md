@@ -104,7 +104,15 @@ Ensure your custom domain (e.g. Cloudflare Tunnel or CNAME) points to the same B
 
 ## Data directory
 
-`data/` is gitignored (uploaded CSVs, `schwab_refresh_token.txt`, etc.). On Beanstalk there is no local `data/` directory. Use the **SCHWAB_TOS_REFRESH_TOKEN** environment variable for the Schwab refresh token. Uploaded account statements in the UI are not persisted across deployments unless you add external storage (e.g. S3).
+**Local:** `data/` is gitignored (uploaded CSVs, ticker filter, tokens). Use `./data/` relative to the app.
+
+**Elastic Beanstalk:** The app uses `/var/app/data` (set via `DATA_DIR` in `.ebextensions`). This directory persists across deploys and restarts. It stores:
+- `AccountStatement.csv` – uploaded account statement
+- `positions_ticker_filter.json` – Filter by Ticker selection
+- `telegram_enabled.txt` – Telegram alerts toggle
+- `schwab_refresh_token.txt` – optional (prefer `SCHWAB_TOS_REFRESH_TOKEN` env var)
+
+After the first deploy with this config, upload your account statement and set your ticker filter once; they will persist across future deploys.
 
 ---
 

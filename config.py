@@ -61,8 +61,13 @@ SCHWAB_TOS_API_SECRET = os.getenv('SCHWAB_TOS_API_SECRET') or _SCHWAB_TOS_API_SE
 SCHWAB_TOS_APP_MACHINE_NAME = os.getenv('SCHWAB_TOS_APP_MACHINE_NAME', '')
 
 # Refresh token: from env, or from file data/schwab_refresh_token.txt (paste token there so you don't lose it)
+def _get_data_dir():
+    """Return persistent data directory. On EB use /var/app/data; locally use ./data."""
+    return os.getenv('DATA_DIR') or os.path.join(os.path.dirname(__file__), 'data')
+
+
 def _read_schwab_refresh_token_from_file():
-    path = os.path.join(os.path.dirname(__file__), 'data', 'schwab_refresh_token.txt')
+    path = os.path.join(_get_data_dir(), 'schwab_refresh_token.txt')
     if os.path.isfile(path):
         try:
             with open(path, 'r') as f:

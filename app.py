@@ -51,12 +51,30 @@ except ImportError:
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') or _telegram_token or "your_telegram_bot_token"
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID') or _telegram_chat or "your_telegram_chat_id"
 
+
+def _get_data_dir():
+    """Return persistent data directory. On EB use /var/app/data; locally use ./data."""
+    return os.getenv('DATA_DIR') or os.path.join(os.path.dirname(__file__), 'data')
+
+
+def _israel_time_str():
+    """Return current time in Israel timezone as 'dd Mon yyyy at HH:MM:SS IST'"""
+    now_utc = datetime.now(timezone.utc)
+    if ZoneInfo:
+        now_israel = now_utc.astimezone(ZoneInfo('Asia/Jerusalem'))
+    else:
+        try:
+            import pytz
+            tz = pytz.timezone('Asia/Jerusalem')
+            now_israel = now_utc.astimezone(tz)
+        except Exception:
+            now_israel = now_utc
+    return now_israel.strftime("%d %b %Y at %H:%M:%S IST")
+
 def send_telegram_alert(ticker, strategy_label, net_profit):
     """Send alert via Telegram when position exceeds threshold"""
     try:
-        # Get current timestamp
-        now = datetime.now()
-        timestamp = now.strftime("%d %b %Y at %H:%M:%S")
+        timestamp = _israel_time_str()
         
         message = f"🔔 <b>Profit Alert!</b>\n\n" \
                   f"<b>Ticker:</b> {ticker}\n" \
@@ -1580,7 +1598,7 @@ def get_stock_events():
 def get_positions_analytics():
     """API endpoint to parse account statement positions analytics data."""
     try:
-        csv_path = os.path.join(os.path.dirname(__file__), 'data', 'AccountStatement.csv')
+        csv_path = os.path.join(_get_data_dir(), 'AccountStatement.csv')
         if not os.path.exists(csv_path):
             return jsonify({'error': f'CSV file not found at {csv_path}'}), 404
 
@@ -1608,7 +1626,7 @@ def upload_positions_analytics():
         if not filename.endswith('.csv'):
             return jsonify({'error': 'Only .csv files are supported.'}), 400
 
-        csv_path = os.path.join(os.path.dirname(__file__), 'data', 'AccountStatement.csv')
+        csv_path = os.path.join(_get_data_dir(), 'AccountStatement.csv')
         os.makedirs(os.path.dirname(csv_path), exist_ok=True)
         file.save(csv_path)
 
@@ -1621,7 +1639,7 @@ def upload_positions_analytics():
 
 
 def _positions_ticker_filter_path():
-    return os.path.join(os.path.dirname(__file__), 'data', 'positions_ticker_filter.json')
+    return os.path.join(_get_data_dir(), 'positions_ticker_filter.json')
 
 
 @app.route('/api/positions-analytics/ticker-filter', methods=['GET'])
@@ -1770,7 +1788,7 @@ def get_positions_close_value():
         if not ticker and not ticker_expiration:
             return jsonify({'error': 'Missing ticker'}), 400
 
-        csv_path = os.path.join(os.path.dirname(__file__), 'data', 'AccountStatement.csv')
+        csv_path = os.path.join(_get_data_dir(), 'AccountStatement.csv')
         if not os.path.exists(csv_path):
             return jsonify({'error': 'Account statement not found'}), 404
 
@@ -2098,7 +2116,7 @@ def schwab_exchange_code():
     refresh_token = body.get('refresh_token')
     if not refresh_token:
         return jsonify({'ok': False, 'error': 'No refresh_token in response. You may have used an old or reused code; get a new code by opening the authorize URL again.'}), 200
-    token_path = os.path.join(os.path.dirname(__file__), 'data', 'schwab_refresh_token.txt')
+    token_path = os.path.join(_get_data_dir(), 'schwab_refresh_token.txt')
     try:
         os.makedirs(os.path.dirname(token_path), exist_ok=True)
         with open(token_path, 'w') as f:
@@ -2149,7 +2167,7 @@ _alert_queue = queue.Queue()
 
 def _telegram_enabled_file():
     """Path to persist Telegram toggle state (survives worker restarts)."""
-    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+    data_dir = _get_data_dir()
     try:
         os.makedirs(data_dir, exist_ok=True)
     except OSError:
@@ -2224,7 +2242,7 @@ def check_ticker_threshold(key):
     try:
         print(f"[Monitor] Checking {key}...", flush=True)
 
-        csv_path = os.path.join(os.path.dirname(__file__), 'data', 'AccountStatement.csv')
+        csv_path = os.path.join(_get_data_dir(), 'AccountStatement.csv')
         if not os.path.exists(csv_path):
             print(f"[Monitor] Account statement not found", flush=True)
             return None
@@ -2326,8 +2344,7 @@ def check_ticker_threshold(key):
                     'detail_index': detail_index
                 })
 
-        now = datetime.now()
-        timestamp = now.strftime("%d %b %Y at %H:%M:%S")
+        timestamp = _israel_time_str()
         first_alert = None
         for s in strategies_above_threshold:
             print(f"[Monitor] ALERT! {key} - {s['label']} - ${s['net_profit']:.2f}", flush=True)
