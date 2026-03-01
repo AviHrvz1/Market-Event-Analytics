@@ -1,0 +1,39 @@
+//@version=5
+indicator("Bearish Date Line", overlay=true, max_lines_count=500)
+
+// Input parameters for bearish date
+year = input.int(2025, title="Year", minval=2000, maxval=2100)
+month = input.int(1, title="Month", minval=1, maxval=12)
+day = input.int(1, title="Day", minval=1, maxval=31)
+
+// Line style and color
+lineColor = input.color(color.red, title="Line Color")
+lineWidth = input.int(2, title="Line Width", minval=1, maxval=5)
+lineStyle = input.string("Solid", title="Line Style", options=["Solid", "Dashed", "Dotted"])
+
+// Convert input date to timestamp
+targetTime = timestamp(year, month, day, 0, 0)
+
+// Determine line style
+var lineStyleEnum = line.style_solid
+if lineStyle == "Dashed"
+    lineStyleEnum := line.style_dashed
+else if lineStyle == "Dotted"
+    lineStyleEnum := line.style_dotted
+
+// Draw vertical line on the bearish date
+if time >= targetTime and time < targetTime + 86400000
+    // Get the full price range for the line
+    var float lineLow = low
+    var float lineHigh = high
+    
+    // Update range to cover full visible area
+    lineLow := math.min(lineLow, low)
+    lineHigh := math.max(lineHigh, high)
+    
+    // Draw the line
+    line.new(bar_index, lineLow, bar_index, lineHigh, color=lineColor, width=lineWidth, style=lineStyleEnum)
+    
+    // Add label at the top
+    label.new(bar_index, lineHigh, "Bearish Date\n" + str.tostring(year) + "-" + str.tostring(month, "00") + "-" + str.tostring(day, "00"), 
+              style=label.style_label_down, color=lineColor, textcolor=color.white, size=size.small)

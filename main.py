@@ -560,7 +560,7 @@ def parse_positions_analytics(csv_path: str) -> Dict[str, object]:
             if not row:
                 continue
             joined = ' '.join(cell.strip() for cell in row if cell)
-            if 'Account Statement for D-67593819 (margin)' in joined:
+            if 'Account Statement for' in joined:
                 section_found = True
                 header_map = None
                 continue
@@ -859,6 +859,19 @@ def parse_positions_analytics(csv_path: str) -> Dict[str, object]:
                             'leg_type': 'To Open' if pos_effect == 'TO OPEN' else 'To Close'
                         })
 
+    def get_detail_expiration_display(detail):
+        """Return expiration as display string e.g. 'MAR 26' from detail description, or ''."""
+        if not detail:
+            return ''
+        parsed = parse_legs_from_description(detail.get('description', ''))
+        if not parsed:
+            return ''
+        leg_key = parsed[0][0]
+        exp_norm, _, _ = parse_leg_key(leg_key)
+        if not exp_norm or len(exp_norm) < 7:
+            return ''
+        return exp_norm[2:5] + ' ' + exp_norm[5:7]
+
     today = datetime.now()
     for group in active_groups.values():
         raw_details = group.get('details', [])
@@ -882,55 +895,102 @@ def parse_positions_analytics(csv_path: str) -> Dict[str, object]:
         for d in group.get('details', []):
             if d and 'leg_type' not in d:
                 d['leg_type'] = _detail_leg_type(d, 'To Open')
+
+        # Bucket details by expiration display
+        details_by_exp = {}
+        for d in group.get('details', []):
+            exp_display = get_detail_expiration_display(d)
+            if exp_display not in details_by_exp:
+                details_by_exp[exp_display] = []
+            details_by_exp[exp_display].append(d)
+        # Assign closed_pairs to expiration (from first open or close detail)
+        pairs_by_exp = {}
+        for pair in group.get('closed_pairs', []):
+            exp_display = ''
+            for open_d in (pair.get('open_details') or []) + ([pair.get('open_detail')] if pair.get('open_detail') else []):
+                if open_d:
+                    exp_display = get_detail_expiration_display(open_d)
+                    break
+            if not exp_display and pair.get('close_detail'):
+                exp_display = get_detail_expiration_display(pair['close_detail'])
+            if exp_display not in pairs_by_exp:
+                pairs_by_exp[exp_display] = []
+            pairs_by_exp[exp_display].append(pair)
+        exp_displays = sorted(set(details_by_exp.keys()) | set(pairs_by_exp.keys()))
+        if not exp_displays:
+            exp_displays = ['']
+
         open_date = datetime.strptime(group['open_date'], '%m/%d/%y')
-        legs = group.get('legs') or {}
-        # Closed only when all legs (strike + quantity) are zero; else fall back to net_qty
-        if legs:
-            is_closed = all(q == 0 for q in legs.values())
-        else:
-            is_closed = group['net_qty'] == 0
-        if is_closed:
-            close_date_str = group['details'][-1].get('date', group['open_date']) if group['details'] else group['open_date']
-            close_date = datetime.strptime(close_date_str, '%m/%d/%y')
-            calendar_days = (close_date.date() - open_date.date()).days
-            trading_days = count_us_trading_days(open_date, close_date)
-            pos = {
+        ticker = group.get('ticker') or ''
+
+        for exp_display in exp_displays:
+            sub_details = details_by_exp.get(exp_display, [])
+            sub_pairs = pairs_by_exp.get(exp_display, [])
+            sub_pl_total = sum(float(d.get('amount', 0)) for d in sub_details) + sum(float(p.get('net_profit', 0)) for p in sub_pairs)
+            sub_group = {
                 'open_date': group['open_date'],
                 'open_datetime': group['open_datetime'],
-                'ticker': group['ticker'],
-                'pl_total': float(group['pl_total']),
-                'status': 'Closed',
-                'close_date': close_date_str,
-                'duration': f"Trading days {trading_days} (calendar days {calendar_days})",
-                'trading_days': trading_days,
-                'calendar_days': calendar_days,
-                'details': group['details'],
-                'closed_pairs': group.get('closed_pairs', []),
-                'strategies': build_strategies_for_group(group)
+                'ticker': ticker,
+                'details': sub_details,
+                'closed_pairs': sub_pairs,
             }
-            if not group.get('closed_pairs') and group.get('details') and all((d.get('leg_type') or '').strip() == 'To Close' for d in group['details']):
-                pos['status'] = 'Closed without Open'
-            positions.append(pos)
-        else:
-            calendar_days = (today.date() - open_date.date()).days
-            trading_days = count_us_trading_days(open_date, today)
-            pos = {
-                'open_date': group['open_date'],
-                'open_datetime': group['open_datetime'],
-                'ticker': group['ticker'],
-                'pl_total': float(group['pl_total']),
-                'status': 'Open',
-                'close_date': None,
-                'duration': f"Trading days {trading_days} (calendar days {calendar_days})",
-                'trading_days': trading_days,
-                'calendar_days': calendar_days,
-                'details': group['details'],
-                'closed_pairs': group.get('closed_pairs', []),
-                'strategies': build_strategies_for_group(group)
-            }
-            if not group.get('closed_pairs') and group.get('details') and all((d.get('leg_type') or '').strip() == 'To Close' for d in group['details']):
-                pos['status'] = 'Closed without Open'
-            positions.append(pos)
+            sub_strategies = build_strategies_for_group(sub_group)
+            # Legs for this sub-group to determine open/closed
+            sub_legs = {}
+            for d in sub_details:
+                for leg_key, qty in parse_legs_from_description(d.get('description', '')):
+                    sub_legs[leg_key] = sub_legs.get(leg_key, 0) + qty
+            is_closed = all(q == 0 for q in sub_legs.values()) if sub_legs else (len(sub_details) == 0 and len(sub_pairs) > 0)
+
+            expiration_display = exp_display if exp_display else ''
+            ticker_expiration = f"{ticker} ({expiration_display})" if expiration_display else ticker
+
+            if is_closed:
+                close_date_str = sub_details[-1].get('date', group['open_date']) if sub_details else group['open_date']
+                close_date = datetime.strptime(close_date_str, '%m/%d/%y')
+                calendar_days = (close_date.date() - open_date.date()).days
+                trading_days = count_us_trading_days(open_date, close_date)
+                pos = {
+                    'open_date': group['open_date'],
+                    'open_datetime': group['open_datetime'],
+                    'ticker': ticker,
+                    'expiration_display': expiration_display,
+                    'ticker_expiration': ticker_expiration,
+                    'pl_total': float(sub_pl_total),
+                    'status': 'Closed',
+                    'close_date': close_date_str,
+                    'duration': f"Trading days {trading_days} (calendar days {calendar_days})",
+                    'trading_days': trading_days,
+                    'calendar_days': calendar_days,
+                    'details': sub_details,
+                    'closed_pairs': sub_pairs,
+                    'strategies': sub_strategies,
+                }
+                if not sub_pairs and sub_details and all((d.get('leg_type') or '').strip() == 'To Close' for d in sub_details):
+                    pos['status'] = 'Closed without Open'
+                positions.append(pos)
+            else:
+                calendar_days = (today.date() - open_date.date()).days
+                trading_days = count_us_trading_days(open_date, today)
+                pos = {
+                    'open_date': group['open_date'],
+                    'open_datetime': group['open_datetime'],
+                    'ticker': ticker,
+                    'expiration_display': expiration_display,
+                    'ticker_expiration': ticker_expiration,
+                    'pl_total': float(sub_pl_total),
+                    'status': 'Open',
+                    'close_date': None,
+                    'duration': f"Trading days {trading_days} (calendar days {calendar_days})",
+                    'trading_days': trading_days,
+                    'calendar_days': calendar_days,
+                    'details': sub_details,
+                    'closed_pairs': sub_pairs,
+                    'strategies': sub_strategies,
+                }
+                if not sub_pairs and sub_details and all((d.get('leg_type') or '').strip() == 'To Close' for d in sub_details):
+                    pos['status'] = 'Closed without Open'
+                positions.append(pos)
 
     closed_positions = [p for p in positions if p.get('status') == 'Closed']
     open_positions = [p for p in positions if p.get('status') == 'Open']
@@ -8029,11 +8089,6 @@ Do not include any explanation, headers, or other text. Just the ticker and perc
             print(f"[FETCH TICKER INFO] No API key configured")
             return None
         
-        # Check if API key is still placeholder
-        if self.claude_api_key == 'sk-ant-api03-YourActualClaudeAPIKeyHere-ReplaceThisWithYourRealKey':
-            print(f"[FETCH TICKER INFO] API key is still using placeholder value.")
-            return None
-        
         try:
             prompt = f"""For the stock ticker symbol {ticker}, provide the following information:
 
@@ -10044,11 +10099,6 @@ Just the number, nothing else."""
         """
         if not self.claude_api_key:
             print(f"[AI OPINION] No API key configured")
-            return None
-        
-        # Check if API key is still placeholder
-        if self.claude_api_key == 'sk-ant-api03-YourActualClaudeAPIKeyHere-ReplaceThisWithYourRealKey':
-            print(f"[AI OPINION] API key is still using placeholder value. Please update config.py with your actual API key.")
             return None
         
         try:

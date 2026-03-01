@@ -50,7 +50,8 @@ test_output*.log
 test_output*.txt
 verification_output.txt
 
-# Secrets and keys (keep local only; copy from secrets.py.example and fill in)
+# Secrets and keys (keep local only; copy from app_secrets.py.example and fill in)
+app_secrets.py
 secrets.py
 
 # Data directory (account statements, tokens, ticker filter - keep local only)
@@ -73,3 +74,8 @@ Thumbs.db
 *.tmp
 *.temp
 
+
+# Elastic Beanstalk Files
+.elasticbeanstalk/*
+!.elasticbeanstalk/*.cfg.yml
+!.elasticbeanstalk/*.global.yml

@@ -1869,6 +1869,21 @@ def get_positions_close_value():
         return jsonify({'error': str(e)}), 500
 
 
+def _schwab_no_proxy_request(method, url, **kwargs):
+    """Run a requests call to Schwab with proxy disabled so tunnel/proxy is never used (403 on local). EB has no proxy."""
+    proxy_vars = ('HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy')
+    saved = {k: os.environ.pop(k, None) for k in proxy_vars}
+    kwargs.setdefault('proxies', {'http': None, 'https': None})
+    try:
+        session = requests.Session()
+        session.trust_env = False
+        return session.request(method, url, **kwargs)
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
+
+
 def _schwab_refresh_access_token() -> str:
     """Refresh Schwab OAuth access token. Raises ValueError with user-friendly message if refresh token is expired/invalid."""
     refresh_token = _get_schwab_refresh_token()
@@ -1880,7 +1895,8 @@ def _schwab_refresh_access_token() -> str:
         'grant_type': 'refresh_token',
         'refresh_token': refresh_token
     }
-    response = requests.post(
+    response = _schwab_no_proxy_request(
+        'post',
         url,
         data=payload,
         auth=(SCHWAB_TOS_API_KEY, SCHWAB_TOS_API_SECRET),
@@ -1924,11 +1940,11 @@ def _schwab_api_get(endpoint: str, params: dict) -> requests.Response:
         'accept': 'application/json',
         'Authorization': f"Bearer {access_token}"
     }
-    response = requests.get(url, params=params, headers=headers, timeout=30)
+    response = _schwab_no_proxy_request('get', url, params=params, headers=headers, timeout=30)
     if response.status_code == 401:
         access_token = _schwab_refresh_access_token()
         headers['Authorization'] = f"Bearer {access_token}"
-        response = requests.get(url, params=params, headers=headers, timeout=30)
+        response = _schwab_no_proxy_request('get', url, params=params, headers=headers, timeout=30)
     return response
 
 
@@ -1985,6 +2001,7 @@ def system_status():
                     'command': 'python3 schwab_oauth_get_refresh_token.py'
                 })
         except Exception as e:
+            print(f"[system-status] Schwab token error: {type(e).__name__}: {e}", flush=True)
             issues.append({
                 'code': 'schwab_token_error',
                 'title': 'Schwab token error',
@@ -2034,7 +2051,8 @@ def schwab_exchange_code():
         'redirect_uri': SCHWAB_TOS_CALLBACK_URL,
     }
     try:
-        response = requests.post(
+        response = _schwab_no_proxy_request(
+            'post',
             url,
             data=payload,
             auth=(SCHWAB_TOS_API_KEY, SCHWAB_TOS_API_SECRET),

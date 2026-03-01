@@ -1,10 +1,18 @@
 # Deploy to Git and AWS Elastic Beanstalk
 
+## AWS account (reference)
+
+- **Account ID:** `966441873206`
+- **Canonical user ID:** `adf015ae7c0d4722d6115b833bfc53749a8c8aa4dc461d4231691acd647e1269`  
+  (Use for IAM or S3 bucket policies if needed.)
+
+To run `eb init` and `eb create`, you still need **access keys**: run `aws configure` and enter your **Access Key ID** and **Secret Access Key** (from IAM → Users → Security credentials → Create access key). The account ID and canonical user ID are not used for login.
+
 ## Prerequisites
 
 - **Git remote:** Ensure `origin` points to your repo, e.g.  
   `git remote add origin https://github.com/AviHrvz1/Market-Event-Analytics.git`
-- **AWS CLI:** Install and run `aws configure` (Access Key, Secret Key, region).
+- **AWS CLI:** Install and run `aws configure` (Access Key ID, Secret Access Key, region).
 - **EB CLI:** `pip install awsebcli`
 
 ---
@@ -34,11 +42,16 @@ Optional: `SCHWAB_TOS_APP_MACHINE_NAME`, `SCHWAB_HEARTBEAT_INTERVAL_HOURS`, `MAX
    ```
    Use your preferred application name and region (e.g. `us-west-2`).
 
-2. **Create the environment** (once):
+2. **Create the environment** (once). For **Free Tier** (no extra cost), create with **t3.micro** via AWS CLI so the instance type is applied from the start:
    ```bash
-   eb create
+   aws elasticbeanstalk create-environment \
+     --application-name layoff-tracker \
+     --environment-name layoff-tracker-prod \
+     --solution-stack-name "64bit Amazon Linux 2023 v4.10.0 running Python 3.9" \
+     --option-settings file://.elasticbeanstalk/options-t3micro.json \
+     --region us-east-1
    ```
-   Or create the environment from the AWS Beanstalk console. The included `.ebextensions` config forces a **single instance** (no load balancer).
+   The file `.elasticbeanstalk/options-t3micro.json` sets `SingleInstance`, `IamInstanceProfile=aws-elasticbeanstalk-ec2-role`, and `InstanceTypes=t3.micro` (Free Tier–eligible). The instance profile is required or the environment fails with "Environment must have instance profile associated with it." Alternatively you can use `eb create <env-name>` and then set **Instance types** to **t3.micro** in the console (Configuration → Capacity) once the environment is Ready.
 
 3. **Set environment variables** in Beanstalk (see table above).
 
@@ -62,6 +75,45 @@ Optional: `SCHWAB_TOS_APP_MACHINE_NAME`, `SCHWAB_HEARTBEAT_INTERVAL_HOURS`, `MAX
 ## Data directory
 
 `data/` is gitignored (uploaded CSVs, `schwab_refresh_token.txt`, etc.). On Beanstalk there is no local `data/` directory. Use the **SCHWAB_TOS_REFRESH_TOKEN** environment variable for the Schwab refresh token. Uploaded account statements in the UI are not persisted across deployments unless you add external storage (e.g. S3).
+
+---
+
+## AWS CLI troubleshooting
+
+If the Beanstalk environment stays in **Launching** with no instances, run these in the same region as the environment (e.g. `us-east-1`).
+
+**Default VPC (required for default Beanstalk setup):**
+```bash
+aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --region us-east-1 --query 'Vpcs[*].{VpcId:VpcId,CidrBlock:CidrBlock}' --output table
+```
+Expect one VPC. If empty, create a default VPC or use a region that has one.
+
+**Default subnets:**
+```bash
+aws ec2 describe-subnets --filters "Name=vpc-id,Values=YOUR_VPC_ID" --region us-east-1 --query 'Subnets[*].{SubnetId:SubnetId,AvailabilityZone:AvailabilityZone}' --output table
+```
+
+**EC2 On-Demand quota:**
+```bash
+aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A --region us-east-1 --query 'Quota.{Name:QuotaName,Value:Value}' --output table
+```
+You need at least 1 vCPU (e.g. one `t3.micro`) available.
+
+**Why the instance isn’t launching (Auto Scaling group):**  
+Get your ASG name from the Beanstalk environment’s CloudFormation stack, or list ASGs:
+```bash
+aws autoscaling describe-auto-scaling-groups --region us-east-1 --query 'AutoScalingGroups[?contains(AutoScalingGroupName, `awseb`)].AutoScalingGroupName' --output text
+```
+Then check scaling activity for the failure reason:
+```bash
+aws autoscaling describe-scaling-activities --auto-scaling-group-name "ASG_NAME_HERE" --region us-east-1 --max-items 5 --query 'Activities[*].{Time:StartTime,StatusCode:StatusCode,StatusMessage:StatusMessage}' --output table
+```
+If you see **"The specified instance type is not eligible for Free Tier"**, the account is restricted to Free Tier–eligible types. Use **t3.micro** (or another Free Tier type) in `.ebextensions` (e.g. `InstanceType: t3.micro`) and redeploy.
+
+**Free Tier–eligible instance types (example):**
+```bash
+aws ec2 describe-instance-types --filters "Name=free-tier-eligible,Values=true" --region us-east-1 --query 'InstanceTypes[*].InstanceType' --output text
+```
 
 ---
 

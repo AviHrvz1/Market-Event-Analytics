@@ -1,0 +1,134 @@
+﻿Symbol,Company Name,Market Cap,Stock Price,Country,Beta (1Y),Options,Avg. Volume,Industry
+NVDA,NVIDIA Corporation,4499934366673,184.86,United States,,Yes,161816441,Semiconductors
+GOOG,Alphabet Inc.,3972000400229,329.14,United States,,Yes,19316799,Internet Content & Information
+GOOGL,"Alphabet, Inc.",3965061512413,328.57,United States,,Yes,29384994,Internet Content & Information
+AAPL,Apple Inc.,3832542658417,259.37,United States,,Yes,43028351,Consumer Electronics
+MSFT,Microsoft Corporation,3562492932151,479.28,United States,,Yes,21845929,Software - Infrastructure
+AMZN,"Amazon.com, Inc.",2643940414034,247.38,United States,,Yes,37828148,Internet Retail
+META,"Meta Platforms, Inc.",1646093315855,653.06,United States,,Yes,13898700,Internet Content & Information
+TSLA,"Tesla, Inc.",1433061946226,445.01,United States,,Yes,76259591,Auto Manufacturers
+BRK.B,Berkshire Hathaway Inc.,1076725809152,499.10,,,Yes,4279804,Insurance - Diversified
+LLY,Eli Lilly and Company,955380691232,1063.56,United States,,Yes,3004472,Drug Manufacturers - General
+WMT,Walmart Inc.,913130651601,114.53,United States,,Yes,19186146,Discount Stores
+JPM,JPMorgan Chase & Co.,896141524891,329.19,United States,,Yes,9096462,Banks - Diversified
+V,Visa Inc.,678703793268,349.77,United States,,Yes,6159418,Credit Services
+ORCL,Oracle Corporation,560626493171,198.52,United States,,Yes,30535982,Software - Infrastructure
+XOM,Exxon Mobil Corporation,525543178817,124.61,United States,,Yes,16609855,Oil & Gas Integrated
+MA,Mastercard Incorporated,516811452932,575.54,United States,,Yes,2819329,Credit Services
+JNJ,Johnson & Johnson,492435825898,204.39,United States,,Yes,7484400,Drug Manufacturers - General
+COST,Costco Wholesale Corporation,410525940846,924.88,United States,,Yes,3097051,Discount Stores
+NFLX,"Netflix, Inc.",378893149651,89.46,United States,,Yes,38066802,Entertainment
+BAC,Bank of America Corporation,407844863312,55.85,United States,,Yes,33735211,Banks - Diversified
+ABBV,AbbVie Inc.,388929165998,220.08,United States,,Yes,5784442,Drug Manufacturers - General
+HD,"The Home Depot, Inc.",372868652253,374.64,United States,,Yes,4222902,Home Improvement Retail
+GE,GE Aerospace,339217605638,321.59,United States,,Yes,4585047,Aerospace & Defense
+PG,The Procter & Gamble Company,331512388597,141.87,United States,,Yes,9593892,Household & Personal Products
+AMD,"Advanced Micro Devices, Inc.",329748429311,203.17,United States,,Yes,27502837,Semiconductors
+CVX,Chevron Corporation,324155198682,162.11,United States,,Yes,10151646,Oil & Gas Integrated
+UNH,UnitedHealth Group Incorporated,311590368508,343.98,United States,,Yes,6019716,Healthcare Plans
+KO,The Coca-Cola Company,303450857115,70.51,United States,,Yes,15695212,Beverages - Non-Alcoholic
+WFC,Wells Fargo & Company,311989415044,95.95,United States,,Yes,11739657,Banks - Diversified
+MS,Morgan Stanley,296120323789,186.32,United States,,Yes,4846928,Capital Markets
+GS,"The Goldman Sachs Group, Inc.",294576826258,938.98,United States,,Yes,2059483,Capital Markets
+CSCO,"Cisco Systems, Inc.",291906866314,73.88,United States,,Yes,20271897,Communication Equipment
+CAT,Caterpillar Inc.,289341931424,617.62,United States,,Yes,2509317,Farm & Heavy Construction Machinery
+IBM,International Business Machines Corporation,284365144369,304.22,United States,,Yes,3439110,Information Technology Services
+MRK,"Merck & Co., Inc.",277784519249,110.53,United States,,Yes,13907748,Drug Manufacturers - General
+LRCX,Lam Research Corporation,274266710800,218.36,United States,,Yes,11996748,Semiconductor Equipment & Materials
+AXP,American Express Company,262081679178,375.61,United States,,Yes,2448047,Credit Services
+PM,Philip Morris International Inc.,253115796743,162.61,United States,,Yes,5541095,Tobacco
+RTX,RTX Corporation,252346773361,188.50,United States,,Yes,4736409,Aerospace & Defense
+CRM,"Salesforce, Inc.",248500258950,259.94,United States,,Yes,6155757,Software - Application
+AMAT,"Applied Materials, Inc.",239932767971,301.18,United States,,Yes,6534553,Semiconductor Equipment & Materials
+INTC,Intel Corporation,217284380301,45.55,United States,,Yes,77510707,Semiconductors
+TMUS,"T-Mobile US, Inc.",224350667671,200.56,United States,,Yes,4865410,Telecom Services
+ABT,Abbott Laboratories,219171477259,125.92,United States,,Yes,5581738,Medical Devices
+MCD,McDonald's Corporation,219595511839,307.32,United States,,Yes,3205927,Restaurants
+C,Citigroup Inc.,225738916017,121.32,United States,,Yes,13110218,Banks - Diversified
+DIS,The Walt Disney Company,209029546162,115.88,United States,,Yes,10157944,Entertainment
+BX,Blackstone Inc.,189157739893,157.62,United States,,Yes,3580942,Asset Management
+PEP,"PepsiCo, Inc.",191310473123,139.91,United States,,Yes,7551017,Beverages - Non-Alcoholic
+QCOM,QUALCOMM Incorporated,190402380000,177.78,United States,,Yes,7401567,Semiconductors
+BA,The Boeing Company,176500715382,234.53,United States,,Yes,6826913,Aerospace & Defense
+SCHW,The Charles Schwab Corporation,182209690381,100.17,United States,,Yes,8307288,Capital Markets
+UBER,"Uber Technologies, Inc.",177529827753,85.44,United States,,Yes,18204925,Software - Application
+AMGN,Amgen Inc.,175598546813,326.10,United States,,Yes,2776500,Drug Manufacturers - General
+TJX,"The TJX Companies, Inc.",175632859088,157.81,United States,,Yes,4353335,Apparel Retail
+TXN,Texas Instruments Incorporated,172920046936,190.31,United States,,Yes,6705765,Semiconductors
+APH,Amphenol Corporation,171563620001,140.16,United States,,Yes,7465638,Electronic Components
+VZ,Verizon Communications Inc.,170596575285,40.46,United States,,Yes,24613402,Telecom Services
+GEV,GE Vernova Inc.,168896985728,622.50,United States,,Yes,3102816,Specialty Industrial Machinery
+DHR,Danaher Corporation,170798162697,238.37,United States,,Yes,2995446,Diagnostics & Research
+NEE,"NextEra Energy, Inc.",166391110647,79.89,United States,,Yes,8272832,Utilities - Regulated Electric
+COF,Capital One Financial Corporation,158424814366,249.20,United States,,Yes,3145462,Credit Services
+GILD,"Gilead Sciences, Inc.",150246302345,121.10,United States,,Yes,6339978,Drug Manufacturers - General
+LOW,"Lowe's Companies, Inc.",149891838825,267.21,United States,,Yes,2388606,Home Improvement Retail
+ADI,"Analog Devices, Inc.",148773465248,300.93,United States,,Yes,3316980,Semiconductors
+NOW,"ServiceNow, Inc.",147157608839,141.80,United States,,Yes,10289227,Software - Application
+BSX,Boston Scientific Corporation,144745640688,97.64,United States,,Yes,8685246,Medical Devices
+ADBE,Adobe Inc.,139791470000,333.95,United States,,Yes,4037418,Software - Application
+UNP,Union Pacific Corporation,135493065864,228.44,United States,,Yes,2469213,Railroads
+PANW,"Palo Alto Networks, Inc.",126407958011,189.02,United States,,Yes,5791964,Software - Infrastructure
+HON,Honeywell International Inc.,131662909195,207.38,United States,,Yes,3601288,Conglomerates
+WELL,Welltower Inc.,127711922241,186.08,United States,,Yes,3617688,REIT - Healthcare Facilities
+PGR,The Progressive Corporation,126151469131,215.16,United States,,Yes,3239229,Insurance - Property & Casualty
+CEG,Constellation Energy Corporation,106968265405,342.52,United States,,Yes,2705170,Utilities - Independent Power Producers
+PLD,"Prologis, Inc.",120054072060,129.40,United States,,Yes,3009139,REIT - Industrial
+COP,ConocoPhillips,121483582962,97.51,United States,,Yes,7551444,Oil & Gas Exploration & Production
+KKR,KKR & Co. Inc.,120020682123,134.65,United States,,Yes,3648118,Asset Management
+CRWD,"CrowdStrike Holdings, Inc.",117258692611,470.61,United States,,Yes,2194409,Software - Infrastructure
+NEM,Newmont Corporation,118936752299,108.99,United States,,Yes,8530835,Gold
+BMY,Bristol-Myers Squibb Company,113717164088,55.86,United States,,Yes,15270456,Drug Manufacturers - General
+ADP,"Automatic Data Processing, Inc.",107592018309,266.02,United States,,Yes,2265365,Software - Application
+CVS,CVS Health Corporation,101935428546,80.30,United States,,Yes,6116117,Healthcare Plans
+SBUX,Starbucks Corporation,101064928052,88.88,United States,,Yes,8392351,Restaurants
+NKE,"NIKE, Inc.",97418090776,65.92,United States,,Yes,26232472,Footwear & Accessories
+MO,"Altria Group, Inc.",96554506721,57.53,United States,,Yes,10351139,Tobacco
+SO,The Southern Company,95687503994,87.01,United States,,Yes,4906332,Utilities - Regulated Electric
+ICE,"Intercontinental Exchange, Inc.",95104897462,165.98,United States,,Yes,2587685,Financial Data & Stock Exchanges
+DASH,"DoorDash, Inc.",92902091696,215.56,United States,,Yes,3769282,Internet Retail
+UPS,"United Parcel Service, Inc.",91675887149,108.06,United States,,Yes,5498050,Integrated Freight & Logistics
+MMC,"Marsh & McLennan Companies, Inc.",91517363448,186.01,United States,,Yes,2365619,Insurance Brokers
+DUK,Duke Energy Corporation,90830830963,116.80,United States,,Yes,3146084,Utilities - Regulated Electric
+MMM,3M Company,87780573096,165.24,United States,,Yes,2263654,Conglomerates
+HWM,Howmet Aerospace Inc.,87853675000,218.27,United States,,Yes,2073429,Aerospace & Defense
+USB,U.S. Bancorp,85820304839,55.21,United States,,Yes,8858333,Banks - Regional
+RCL,Royal Caribbean Cruises Ltd.,84950090778,311.50,United States,,Yes,2133695,Travel Services
+APO,"Apollo Global Management, Inc.",84636960035,145.82,United States,,Yes,2549961,Asset Management
+ABNB,"Airbnb, Inc.",86136800502,139.27,United States,,Yes,4037707,Travel Services
+BK,The Bank of New York Mellon Corporation,83012556023,119.04,United States,,Yes,3340164,Banks - Diversified
+FCX,Freeport-McMoRan Inc.,81173160210,56.53,United States,,Yes,16687941,Copper
+EMR,Emerson Electric Co.,81020669547,144.20,United States,,Yes,2507732,Specialty Industrial Machinery
+ORLY,"O'Reilly Automotive, Inc.",79269911750,93.80,United States,,Yes,5621667,Auto Parts
+AMT,American Tower Corporation,78887387442,168.51,United States,,Yes,3140146,REIT - Specialty
+GM,General Motors Company,77307213106,82.87,United States,,Yes,8568223,Auto Manufacturers
+MNST,Monster Beverage Corporation,75562646134,77.34,United States,,Yes,4826607,Beverages - Non-Alcoholic
+SNOW,Snowflake Inc.,73343015563,219.09,United States,,Yes,3695336,Software - Application
+WMB,"The Williams Companies, Inc.",73663922057,60.32,United States,,Yes,6179202,Oil & Gas Midstream
+GLW,Corning Incorporated,73072826551,85.23,United States,,Yes,5518528,Electronic Components
+MDLZ,"Mondelez International, Inc.",71112401768,55.09,United States,,Yes,12183271,Confectioners
+SLB,SLB N.V.,67525348302,45.20,United States,,Yes,15719541,Oil & Gas Equipment & Services
+CL,Colgate-Palmolive Company,65683767765,81.48,United States,,Yes,5779451,Household & Personal Products
+TFC,Truist Financial Corporation,65766423158,50.62,United States,,Yes,7169429,Banks - Regional
+NET,"Cloudflare, Inc.",64022209311,182.78,United States,,Yes,2048517,Software - Infrastructure
+AEP,"American Electric Power Company, Inc.",62572982074,116.91,United States,,Yes,2927572,Utilities - Regulated Electric
+PCAR,PACCAR Inc,62393566712,118.80,United States,,Yes,3102890,Farm & Heavy Construction Machinery
+ROST,"Ross Stores, Inc.",62261317512,191.44,United States,,Yes,2302462,Apparel Retail
+FTNT,"Fortinet, Inc.",60520199963,79.22,United States,,Yes,5882982,Software - Infrastructure
+SRE,Sempra,57971172695,88.82,United States,,Yes,2872052,Utilities - Diversified
+ARES,Ares Management Corporation,57771474910,175.91,United States,,Yes,2151659,Asset Management
+PSX,Phillips 66,57279268552,142.16,United States,,Yes,2697302,Oil & Gas Refining & Marketing
+AFL,Aflac Incorporated,59098907292,109.24,United States,,Yes,2316239,Insurance - Life
+EOG,"EOG Resources, Inc.",57496736326,104.92,United States,,Yes,3692891,Oil & Gas Exploration & Production
+VLO,Valero Energy Corporation,57853712609,185.28,United States,,Yes,3807728,Oil & Gas Refining & Marketing
+VST,Vistra Corp.,56370396771,166.37,United States,,Yes,5318030,Utilities - Independent Power Producers
+NDAQ,"Nasdaq, Inc.",56417374675,98.24,United States,,Yes,3657155,Financial Data & Stock Exchanges
+ZTS,Zoetis Inc.,56042956024,127.17,United States,,Yes,5801757,Drug Manufacturers - Specialty & Generic
+DLR,"Digital Realty Trust, Inc.",54461816552,158.55,United States,,Yes,2193085,REIT - Specialty
+WDAY,"Workday, Inc.",55318392721,207.19,United States,,Yes,2735813,Software - Application
+PYPL,"PayPal Holdings, Inc.",53949691610,57.66,United States,,Yes,15128475,Credit Services
+O,Realty Income Corporation,53510918350,58.17,United States,,Yes,6514897,REIT - Retail
+CMG,"Chipotle Mexican Grill, Inc.",54107647243,40.11,United States,,Yes,17628866,Restaurants
+MPC,Marathon Petroleum Corporation,52957138725,176.17,United States,,Yes,2506309,Oil & Gas Refining & Marketing
+MET,"MetLife, Inc.",52323168002,79.41,United States,,Yes,3354309,Insurance - Life
+RBLX,Roblox Corporation,49734828779,73.27,United States,,Yes,8000771,Electronic Gaming & Multimedia
