@@ -1532,7 +1532,13 @@
                                 <th style="padding: 8px 6px; text-align: right; font-weight: 600; color: #2c3e50;">P/L</th>
                                 <th style="padding: 8px 6px; text-align: center; font-weight: 600; color: #2c3e50;">Status</th>
                                 <th style="padding: 8px 6px; text-align: center; font-weight: 600; color: #2c3e50;">Duration</th>
-                                <th style="padding: 8px 6px; text-align: center; font-weight: 600; color: #2c3e50;">Alert</th>
+                                <th style="padding: 8px 6px; text-align: center; font-weight: 600; color: #2c3e50;">
+                                    <span id="master-bell-icon" class="master-bell-icon" data-master-enabled="false" style="cursor: pointer; font-size: 1.2em; user-select: none; margin-right: 4px;" title="Enable/disable all alerts for visible tickers">🔕</span>
+                                    Alert
+                                    {% if is_production|default(false) %}
+                                    <span id="telegram-notify-btn" class="telegram-notify-btn" data-telegram-enabled="false" style="cursor: pointer; font-size: 1.1em; margin-left: 8px; opacity: 0.6;" title="Enable/disable Telegram notifications">📱</span>
+                                    {% endif %}
+                                </th>
                             </tr>
                         </thead>
                         <tbody id="positions-analytics-body"></tbody>
@@ -3862,6 +3868,10 @@
         // Monitoring system variables
         let monitoredTickers = new Set();
         let alertEventSource = null;
+        let _pendingAlerts = [];
+        let _alertDebounceTimer = null;
+        let masterBellsEnabled = false;
+        let telegramEnabled = false;
 
         // Load monitored tickers on page load
         function loadMonitoringStatus() {
@@ -3924,6 +3934,25 @@
             .catch(err => console.error('[Monitor] Toggle failed:', err));
         }
 
+        function clearAllProfitToasts() {
+            document.querySelectorAll('.toastify').forEach(el => el.remove());
+        }
+
+        function flushPendingAlerts() {
+            if (_alertDebounceTimer) {
+                clearTimeout(_alertDebounceTimer);
+                _alertDebounceTimer = null;
+            }
+            const alerts = _pendingAlerts.slice();
+            _pendingAlerts = [];
+            if (alerts.length === 0) return;
+            clearAllProfitToasts();
+            alerts.forEach(a => {
+                const displayKey = a.ticker_expiration || a.ticker;
+                showProfitAlert(displayKey, a.strategies, a.net_profit, a.timestamp, a.detail_index);
+            });
+        }
+
         function startAlertStream() {
             if (alertEventSource) return;
             
@@ -3935,8 +3964,9 @@
                     try {
                         const alert = JSON.parse(event.data);
                         console.log('[Monitor] Alert received:', alert);
-                        const displayKey = alert.ticker_expiration || alert.ticker;
-                        showProfitAlert(displayKey, alert.strategies, alert.net_profit, alert.timestamp, alert.detail_index);
+                        _pendingAlerts.push(alert);
+                        if (_alertDebounceTimer) clearTimeout(_alertDebounceTimer);
+                        _alertDebounceTimer = setTimeout(flushPendingAlerts, 300);
                     } catch (e) {
                         console.error('[Monitor] Failed to parse alert:', e);
                     }
@@ -4037,12 +4067,98 @@
             }
         }
 
+        function getVisiblePositionKeys() {
+            const body = document.getElementById('positions-analytics-body');
+            if (!body) return [];
+            const keys = [];
+            body.querySelectorAll('tr[data-position-row="parent"]').forEach((row) => {
+                if (row.style.display === 'none') return;
+                const key = (row.dataset.tickerExpiration || row.dataset.ticker || '').trim();
+                if (key) keys.push(key);
+            });
+            return keys;
+        }
+
+        function toggleMasterBells() {
+            const keys = getVisiblePositionKeys();
+            if (keys.length === 0) return;
+            const enabling = !masterBellsEnabled;
+            const endpoint = enabling ? 'start' : 'stop';
+            const promises = keys.map((key) => {
+                const body = key.indexOf(' (') !== -1 ? { ticker_expiration: key } : { ticker: key };
+                return fetch(`/api/positions-analytics/monitor/${endpoint}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body)
+                }).then(r => r.json());
+            });
+            Promise.all(promises).then(() => {
+                masterBellsEnabled = enabling;
+                keys.forEach((k) => {
+                    if (enabling) monitoredTickers.add(k); else monitoredTickers.delete(k);
+                });
+                updateBellIcons();
+                const iconEl = document.getElementById('master-bell-icon');
+                if (iconEl) {
+                    iconEl.textContent = masterBellsEnabled ? '🔔' : '🔕';
+                    iconEl.dataset.masterEnabled = masterBellsEnabled ? 'true' : 'false';
+                }
+                if (enabling && monitoredTickers.size > 0) startAlertStream();
+                else if (!enabling && monitoredTickers.size === 0 && alertEventSource) {
+                    alertEventSource.close();
+                    alertEventSource = null;
+                }
+            }).catch(err => console.error('[Monitor] Master bell toggle failed:', err));
+        }
+
+        function toggleTelegramNotify() {
+            telegramEnabled = !telegramEnabled;
+            fetch('/api/positions-analytics/monitor/telegram', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ enabled: telegramEnabled })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    telegramEnabled = data.enabled;
+                    const btn = document.getElementById('telegram-notify-btn');
+                    if (btn) {
+                        btn.dataset.telegramEnabled = telegramEnabled ? 'true' : 'false';
+                        btn.style.opacity = telegramEnabled ? '1' : '0.6';
+                        btn.title = telegramEnabled ? 'Telegram enabled (click to disable)' : 'Enable/disable Telegram notifications';
+                    }
+                }
+            })
+            .catch(err => console.error('[Monitor] Telegram toggle failed:', err));
+        }
+
+        function loadTelegramStatus() {
+            fetch('/api/positions-analytics/monitor/telegram')
+                .then(r => r.json())
+                .then(data => {
+                    telegramEnabled = data.enabled || false;
+                    const btn = document.getElementById('telegram-notify-btn');
+                    if (btn) {
+                        btn.dataset.telegramEnabled = telegramEnabled ? 'true' : 'false';
+                        btn.style.opacity = telegramEnabled ? '1' : '0.6';
+                    }
+                })
+                .catch(() => {});
+        }
+
         // Add click handlers for bell icons
         document.addEventListener('click', (e) => {
             if (e.target.classList.contains('bell-icon')) {
                 e.stopPropagation();
                 const key = (e.target.dataset.tickerExpiration || e.target.dataset.ticker || '').trim();
                 if (key) toggleMonitoring(key, e.target);
+            } else if (e.target.id === 'master-bell-icon' || e.target.classList.contains('master-bell-icon')) {
+                e.stopPropagation();
+                toggleMasterBells();
+            } else if (e.target.id === 'telegram-notify-btn' || e.target.classList.contains('telegram-notify-btn')) {
+                e.stopPropagation();
+                toggleTelegramNotify();
             }
         });
 
@@ -4051,6 +4167,7 @@
             loadPositionsAnalytics();
             setTimeout(() => {
                 loadMonitoringStatus();
+                loadTelegramStatus();
             }, 500);
         }
 

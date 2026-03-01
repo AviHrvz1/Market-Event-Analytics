@@ -239,7 +239,8 @@ class LogCapture:
 @app.route('/')
 def index():
     """Main page with layoff data table"""
-    resp = make_response(render_template('index.html'))
+    is_production = 'localhost' not in request.host and '127.0.0.1' not in request.host
+    resp = make_response(render_template('index.html', is_production=is_production))
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     resp.headers['Pragma'] = 'no-cache'
     resp.headers['Expires'] = '0'
@@ -2143,6 +2144,7 @@ _monitored_tickers = set()  # Set of ticker symbols
 _monitoring_thread = None
 _monitoring_active = False
 _alert_queue = queue.Queue()
+_telegram_alerts_enabled = False
 
 def _monitor_positions_loop():
     """Background thread that checks monitored tickers every 5 minutes"""
@@ -2307,6 +2309,8 @@ def check_ticker_threshold(key):
             if is_ticker_expiration:
                 alert_data['ticker_expiration'] = key
             _alert_queue.put(alert_data)
+            if _telegram_alerts_enabled:
+                send_telegram_alert(key, s['label'], s['net_profit'])
             if first_alert is None:
                 first_alert = alert_data
 
@@ -3356,6 +3360,18 @@ def stop_monitoring_ticker():
 def get_monitoring_status():
     """Get list of currently monitored tickers"""
     return jsonify({'monitored': list(_monitored_tickers)})
+
+@app.route('/api/positions-analytics/monitor/telegram', methods=['GET', 'POST'])
+def telegram_toggle():
+    """GET: return whether Telegram alerts are enabled. POST: set enabled state."""
+    global _telegram_alerts_enabled
+    if request.method == 'GET':
+        return jsonify({'enabled': _telegram_alerts_enabled})
+    data = request.get_json() or {}
+    enabled = data.get('enabled', False)
+    _telegram_alerts_enabled = bool(enabled)
+    print(f"[Monitor] Telegram alerts {'enabled' if _telegram_alerts_enabled else 'disabled'}", flush=True)
+    return jsonify({'ok': True, 'enabled': _telegram_alerts_enabled})
 
 @app.route('/api/positions-analytics/monitor/check', methods=['POST'])
 def manual_check_ticker():
