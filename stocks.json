@@ -1,0 +1,667 @@
+{
+  "NVDA": {
+    "name": "NVIDIA Corporation",
+    "industry": "Technology",
+    "market_cap": 4499934366673
+  },
+  "GOOG": {
+    "name": "Alphabet Inc.",
+    "industry": "Technology",
+    "market_cap": 3972000400229
+  },
+  "GOOGL": {
+    "name": "Alphabet, Inc.",
+    "industry": "Technology",
+    "market_cap": 3965061512413
+  },
+  "AAPL": {
+    "name": "Apple Inc.",
+    "industry": "Consumer",
+    "market_cap": 3832542658417
+  },
+  "MSFT": {
+    "name": "Microsoft Corporation",
+    "industry": "Technology",
+    "market_cap": 3562492932151
+  },
+  "AMZN": {
+    "name": "Amazon.com, Inc.",
+    "industry": "Consumer",
+    "market_cap": 2643940414034
+  },
+  "META": {
+    "name": "Meta Platforms, Inc.",
+    "industry": "Technology",
+    "market_cap": 1646093315855
+  },
+  "TSLA": {
+    "name": "Tesla, Inc.",
+    "industry": "Industrial",
+    "market_cap": 1433061946226
+  },
+  "BRK.B": {
+    "name": "Berkshire Hathaway Inc.",
+    "industry": "Financials",
+    "market_cap": 1076725809152
+  },
+  "LLY": {
+    "name": "Eli Lilly and Company",
+    "industry": "Healthcare",
+    "market_cap": 955380691232
+  },
+  "WMT": {
+    "name": "Walmart Inc.",
+    "industry": "Consumer",
+    "market_cap": 913130651601
+  },
+  "JPM": {
+    "name": "JPMorgan Chase & Co.",
+    "industry": "Financials",
+    "market_cap": 896141524891
+  },
+  "V": {
+    "name": "Visa Inc.",
+    "industry": "Financials",
+    "market_cap": 678703793268
+  },
+  "ORCL": {
+    "name": "Oracle Corporation",
+    "industry": "Technology",
+    "market_cap": 560626493171
+  },
+  "XOM": {
+    "name": "Exxon Mobil Corporation",
+    "industry": "Energy",
+    "market_cap": 525543178817
+  },
+  "MA": {
+    "name": "Mastercard Incorporated",
+    "industry": "Financials",
+    "market_cap": 516811452932
+  },
+  "JNJ": {
+    "name": "Johnson & Johnson",
+    "industry": "Healthcare",
+    "market_cap": 492435825898
+  },
+  "COST": {
+    "name": "Costco Wholesale Corporation",
+    "industry": "Consumer",
+    "market_cap": 410525940846
+  },
+  "NFLX": {
+    "name": "Netflix, Inc.",
+    "industry": "Consumer",
+    "market_cap": 378893149651
+  },
+  "BAC": {
+    "name": "Bank of America Corporation",
+    "industry": "Financials",
+    "market_cap": 407844863312
+  },
+  "ABBV": {
+    "name": "AbbVie Inc.",
+    "industry": "Healthcare",
+    "market_cap": 388929165998
+  },
+  "HD": {
+    "name": "The Home Depot, Inc.",
+    "industry": "Consumer",
+    "market_cap": 372868652253
+  },
+  "GE": {
+    "name": "GE Aerospace",
+    "industry": "Industrial",
+    "market_cap": 339217605638
+  },
+  "PG": {
+    "name": "The Procter & Gamble Company",
+    "industry": "Consumer",
+    "market_cap": 331512388597
+  },
+  "AMD": {
+    "name": "Advanced Micro Devices, Inc.",
+    "industry": "Technology",
+    "market_cap": 329748429311
+  },
+  "CVX": {
+    "name": "Chevron Corporation",
+    "industry": "Energy",
+    "market_cap": 324155198682
+  },
+  "UNH": {
+    "name": "UnitedHealth Group Incorporated",
+    "industry": "Healthcare",
+    "market_cap": 311590368508
+  },
+  "KO": {
+    "name": "The Coca-Cola Company",
+    "industry": "Consumer",
+    "market_cap": 303450857115
+  },
+  "WFC": {
+    "name": "Wells Fargo & Company",
+    "industry": "Financials",
+    "market_cap": 311989415044
+  },
+  "MS": {
+    "name": "Morgan Stanley",
+    "industry": "Financials",
+    "market_cap": 296120323789
+  },
+  "GS": {
+    "name": "The Goldman Sachs Group, Inc.",
+    "industry": "Financials",
+    "market_cap": 294576826258
+  },
+  "CSCO": {
+    "name": "Cisco Systems, Inc.",
+    "industry": "Technology",
+    "market_cap": 291906866314
+  },
+  "CAT": {
+    "name": "Caterpillar Inc.",
+    "industry": "Industrial",
+    "market_cap": 289341931424
+  },
+  "IBM": {
+    "name": "International Business Machines Corporation",
+    "industry": "Technology",
+    "market_cap": 284365144369
+  },
+  "MRK": {
+    "name": "Merck & Co., Inc.",
+    "industry": "Healthcare",
+    "market_cap": 277784519249
+  },
+  "LRCX": {
+    "name": "Lam Research Corporation",
+    "industry": "Technology",
+    "market_cap": 274266710800
+  },
+  "AXP": {
+    "name": "American Express Company",
+    "industry": "Financials",
+    "market_cap": 262081679178
+  },
+  "PM": {
+    "name": "Philip Morris International Inc.",
+    "industry": "Consumer",
+    "market_cap": 253115796743
+  },
+  "RTX": {
+    "name": "RTX Corporation",
+    "industry": "Industrial",
+    "market_cap": 252346773361
+  },
+  "CRM": {
+    "name": "Salesforce, Inc.",
+    "industry": "Technology",
+    "market_cap": 248500258950
+  },
+  "AMAT": {
+    "name": "Applied Materials, Inc.",
+    "industry": "Technology",
+    "market_cap": 239932767971
+  },
+  "INTC": {
+    "name": "Intel Corporation",
+    "industry": "Technology",
+    "market_cap": 217284380301
+  },
+  "TMUS": {
+    "name": "T-Mobile US, Inc.",
+    "industry": "Communication",
+    "market_cap": 224350667671
+  },
+  "ABT": {
+    "name": "Abbott Laboratories",
+    "industry": "Healthcare",
+    "market_cap": 219171477259
+  },
+  "MCD": {
+    "name": "McDonald's Corporation",
+    "industry": "Consumer",
+    "market_cap": 219595511839
+  },
+  "C": {
+    "name": "Citigroup Inc.",
+    "industry": "Financials",
+    "market_cap": 225738916017
+  },
+  "DIS": {
+    "name": "The Walt Disney Company",
+    "industry": "Consumer",
+    "market_cap": 209029546162
+  },
+  "BX": {
+    "name": "Blackstone Inc.",
+    "industry": "Financials",
+    "market_cap": 189157739893
+  },
+  "PEP": {
+    "name": "PepsiCo, Inc.",
+    "industry": "Consumer",
+    "market_cap": 191310473123
+  },
+  "QCOM": {
+    "name": "QUALCOMM Incorporated",
+    "industry": "Technology",
+    "market_cap": 190402380000
+  },
+  "BA": {
+    "name": "The Boeing Company",
+    "industry": "Industrial",
+    "market_cap": 176500715382
+  },
+  "SCHW": {
+    "name": "The Charles Schwab Corporation",
+    "industry": "Financials",
+    "market_cap": 182209690381
+  },
+  "UBER": {
+    "name": "Uber Technologies, Inc.",
+    "industry": "Technology",
+    "market_cap": 177529827753
+  },
+  "AMGN": {
+    "name": "Amgen Inc.",
+    "industry": "Healthcare",
+    "market_cap": 175598546813
+  },
+  "TJX": {
+    "name": "The TJX Companies, Inc.",
+    "industry": "Consumer",
+    "market_cap": 175632859088
+  },
+  "TXN": {
+    "name": "Texas Instruments Incorporated",
+    "industry": "Technology",
+    "market_cap": 172920046936
+  },
+  "APH": {
+    "name": "Amphenol Corporation",
+    "industry": "Technology",
+    "market_cap": 171563620001
+  },
+  "VZ": {
+    "name": "Verizon Communications Inc.",
+    "industry": "Communication",
+    "market_cap": 170596575285
+  },
+  "GEV": {
+    "name": "GE Vernova Inc.",
+    "industry": "Industrial",
+    "market_cap": 168896985728
+  },
+  "DHR": {
+    "name": "Danaher Corporation",
+    "industry": "Healthcare",
+    "market_cap": 170798162697
+  },
+  "NEE": {
+    "name": "NextEra Energy, Inc.",
+    "industry": "Utilities",
+    "market_cap": 166391110647
+  },
+  "COF": {
+    "name": "Capital One Financial Corporation",
+    "industry": "Financials",
+    "market_cap": 158424814366
+  },
+  "GILD": {
+    "name": "Gilead Sciences, Inc.",
+    "industry": "Healthcare",
+    "market_cap": 150246302345
+  },
+  "LOW": {
+    "name": "Lowe's Companies, Inc.",
+    "industry": "Consumer",
+    "market_cap": 149891838825
+  },
+  "ADI": {
+    "name": "Analog Devices, Inc.",
+    "industry": "Technology",
+    "market_cap": 148773465248
+  },
+  "NOW": {
+    "name": "ServiceNow, Inc.",
+    "industry": "Technology",
+    "market_cap": 147157608839
+  },
+  "BSX": {
+    "name": "Boston Scientific Corporation",
+    "industry": "Healthcare",
+    "market_cap": 144745640688
+  },
+  "ADBE": {
+    "name": "Adobe Inc.",
+    "industry": "Technology",
+    "market_cap": 139791470000
+  },
+  "UNP": {
+    "name": "Union Pacific Corporation",
+    "industry": "Industrial",
+    "market_cap": 135493065864
+  },
+  "PANW": {
+    "name": "Palo Alto Networks, Inc.",
+    "industry": "Technology",
+    "market_cap": 126407958011
+  },
+  "HON": {
+    "name": "Honeywell International Inc.",
+    "industry": "Industrial",
+    "market_cap": 131662909195
+  },
+  "WELL": {
+    "name": "Welltower Inc.",
+    "industry": "Real Estate",
+    "market_cap": 127711922241
+  },
+  "PGR": {
+    "name": "The Progressive Corporation",
+    "industry": "Financials",
+    "market_cap": 126151469131
+  },
+  "CEG": {
+    "name": "Constellation Energy Corporation",
+    "industry": "Utilities",
+    "market_cap": 106968265405
+  },
+  "PLD": {
+    "name": "Prologis, Inc.",
+    "industry": "Real Estate",
+    "market_cap": 120054072060
+  },
+  "COP": {
+    "name": "ConocoPhillips",
+    "industry": "Energy",
+    "market_cap": 121483582962
+  },
+  "KKR": {
+    "name": "KKR & Co. Inc.",
+    "industry": "Financials",
+    "market_cap": 120020682123
+  },
+  "CRWD": {
+    "name": "CrowdStrike Holdings, Inc.",
+    "industry": "Technology",
+    "market_cap": 117258692611
+  },
+  "NEM": {
+    "name": "Newmont Corporation",
+    "industry": "Materials",
+    "market_cap": 118936752299
+  },
+  "BMY": {
+    "name": "Bristol-Myers Squibb Company",
+    "industry": "Healthcare",
+    "market_cap": 113717164088
+  },
+  "ADP": {
+    "name": "Automatic Data Processing, Inc.",
+    "industry": "Technology",
+    "market_cap": 107592018309
+  },
+  "CVS": {
+    "name": "CVS Health Corporation",
+    "industry": "Healthcare",
+    "market_cap": 101935428546
+  },
+  "SBUX": {
+    "name": "Starbucks Corporation",
+    "industry": "Consumer",
+    "market_cap": 101064928052
+  },
+  "NKE": {
+    "name": "NIKE, Inc.",
+    "industry": "Consumer",
+    "market_cap": 97418090776
+  },
+  "MO": {
+    "name": "Altria Group, Inc.",
+    "industry": "Consumer",
+    "market_cap": 96554506721
+  },
+  "SO": {
+    "name": "The Southern Company",
+    "industry": "Utilities",
+    "market_cap": 95687503994
+  },
+  "ICE": {
+    "name": "Intercontinental Exchange, Inc.",
+    "industry": "Financials",
+    "market_cap": 95104897462
+  },
+  "DASH": {
+    "name": "DoorDash, Inc.",
+    "industry": "Consumer",
+    "market_cap": 92902091696
+  },
+  "UPS": {
+    "name": "United Parcel Service, Inc.",
+    "industry": "Industrial",
+    "market_cap": 91675887149
+  },
+  "MMC": {
+    "name": "Marsh & McLennan Companies, Inc.",
+    "industry": "Financials",
+    "market_cap": 91517363448
+  },
+  "DUK": {
+    "name": "Duke Energy Corporation",
+    "industry": "Utilities",
+    "market_cap": 90830830963
+  },
+  "MMM": {
+    "name": "3M Company",
+    "industry": "Industrial",
+    "market_cap": 87780573096
+  },
+  "HWM": {
+    "name": "Howmet Aerospace Inc.",
+    "industry": "Industrial",
+    "market_cap": 87853675000
+  },
+  "USB": {
+    "name": "U.S. Bancorp",
+    "industry": "Financials",
+    "market_cap": 85820304839
+  },
+  "RCL": {
+    "name": "Royal Caribbean Cruises Ltd.",
+    "industry": "Consumer",
+    "market_cap": 84950090778
+  },
+  "APO": {
+    "name": "Apollo Global Management, Inc.",
+    "industry": "Financials",
+    "market_cap": 84636960035
+  },
+  "ABNB": {
+    "name": "Airbnb, Inc.",
+    "industry": "Consumer",
+    "market_cap": 86136800502
+  },
+  "BK": {
+    "name": "The Bank of New York Mellon Corporation",
+    "industry": "Financials",
+    "market_cap": 83012556023
+  },
+  "FCX": {
+    "name": "Freeport-McMoRan Inc.",
+    "industry": "Materials",
+    "market_cap": 81173160210
+  },
+  "EMR": {
+    "name": "Emerson Electric Co.",
+    "industry": "Industrial",
+    "market_cap": 81020669547
+  },
+  "ORLY": {
+    "name": "O'Reilly Automotive, Inc.",
+    "industry": "Industrial",
+    "market_cap": 79269911750
+  },
+  "AMT": {
+    "name": "American Tower Corporation",
+    "industry": "Real Estate",
+    "market_cap": 78887387442
+  },
+  "GM": {
+    "name": "General Motors Company",
+    "industry": "Industrial",
+    "market_cap": 77307213106
+  },
+  "MNST": {
+    "name": "Monster Beverage Corporation",
+    "industry": "Consumer",
+    "market_cap": 75562646134
+  },
+  "SNOW": {
+    "name": "Snowflake Inc.",
+    "industry": "Technology",
+    "market_cap": 73343015563
+  },
+  "WMB": {
+    "name": "The Williams Companies, Inc.",
+    "industry": "Energy",
+    "market_cap": 73663922057
+  },
+  "GLW": {
+    "name": "Corning Incorporated",
+    "industry": "Technology",
+    "market_cap": 73072826551
+  },
+  "MDLZ": {
+    "name": "Mondelez International, Inc.",
+    "industry": "Consumer",
+    "market_cap": 71112401768
+  },
+  "SLB": {
+    "name": "SLB N.V.",
+    "industry": "Energy",
+    "market_cap": 67525348302
+  },
+  "CL": {
+    "name": "Colgate-Palmolive Company",
+    "industry": "Consumer",
+    "market_cap": 65683767765
+  },
+  "TFC": {
+    "name": "Truist Financial Corporation",
+    "industry": "Financials",
+    "market_cap": 65766423158
+  },
+  "NET": {
+    "name": "Cloudflare, Inc.",
+    "industry": "Technology",
+    "market_cap": 64022209311
+  },
+  "AEP": {
+    "name": "American Electric Power Company, Inc.",
+    "industry": "Utilities",
+    "market_cap": 62572982074
+  },
+  "PCAR": {
+    "name": "PACCAR Inc",
+    "industry": "Industrial",
+    "market_cap": 62393566712
+  },
+  "ROST": {
+    "name": "Ross Stores, Inc.",
+    "industry": "Consumer",
+    "market_cap": 62261317512
+  },
+  "FTNT": {
+    "name": "Fortinet, Inc.",
+    "industry": "Technology",
+    "market_cap": 60520199963
+  },
+  "SRE": {
+    "name": "Sempra",
+    "industry": "Utilities",
+    "market_cap": 57971172695
+  },
+  "ARES": {
+    "name": "Ares Management Corporation",
+    "industry": "Financials",
+    "market_cap": 57771474910
+  },
+  "PSX": {
+    "name": "Phillips 66",
+    "industry": "Energy",
+    "market_cap": 57279268552
+  },
+  "AFL": {
+    "name": "Aflac Incorporated",
+    "industry": "Financials",
+    "market_cap": 59098907292
+  },
+  "EOG": {
+    "name": "EOG Resources, Inc.",
+    "industry": "Energy",
+    "market_cap": 57496736326
+  },
+  "VLO": {
+    "name": "Valero Energy Corporation",
+    "industry": "Energy",
+    "market_cap": 57853712609
+  },
+  "VST": {
+    "name": "Vistra Corp.",
+    "industry": "Utilities",
+    "market_cap": 56370396771
+  },
+  "NDAQ": {
+    "name": "Nasdaq, Inc.",
+    "industry": "Financials",
+    "market_cap": 56417374675
+  },
+  "ZTS": {
+    "name": "Zoetis Inc.",
+    "industry": "Healthcare",
+    "market_cap": 56042956024
+  },
+  "DLR": {
+    "name": "Digital Realty Trust, Inc.",
+    "industry": "Real Estate",
+    "market_cap": 54461816552
+  },
+  "WDAY": {
+    "name": "Workday, Inc.",
+    "industry": "Technology",
+    "market_cap": 55318392721
+  },
+  "PYPL": {
+    "name": "PayPal Holdings, Inc.",
+    "industry": "Financials",
+    "market_cap": 53949691610
+  },
+  "O": {
+    "name": "Realty Income Corporation",
+    "industry": "Real Estate",
+    "market_cap": 53510918350
+  },
+  "CMG": {
+    "name": "Chipotle Mexican Grill, Inc.",
+    "industry": "Consumer",
+    "market_cap": 54107647243
+  },
+  "MPC": {
+    "name": "Marathon Petroleum Corporation",
+    "industry": "Energy",
+    "market_cap": 52957138725
+  },
+  "MET": {
+    "name": "MetLife, Inc.",
+    "industry": "Financials",
+    "market_cap": 52323168002
+  },
+  "RBLX": {
+    "name": "Roblox Corporation",
+    "industry": "Technology",
+    "market_cap": 49734828779
+  }
+}
