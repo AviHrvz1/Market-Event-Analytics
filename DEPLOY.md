@@ -32,6 +32,34 @@ Set these in the Beanstalk environment (Console → your app → Configuration �
 
 Optional: `SCHWAB_TOS_APP_MACHINE_NAME`, `SCHWAB_HEARTBEAT_INTERVAL_HOURS`, `MAX_ARTICLES_TO_PROCESS`, `PRIXE_PRICE_ENDPOINT`, `PRIXE_BASE_URL`.
 
+**`SCHWAB_TOS_CALLBACK_URL`** — OAuth redirect after Schwab login. Default is `https://api.avi-marketdata.xyz/schwab/callback`. On Beanstalk, set this to the **exact** URL where users land after logging in at Schwab. See **Schwab callback (Option B)** below to use the custom domain and avoid Chrome’s “Dangerous site” warning.
+
+---
+
+## Schwab callback (Option B — custom domain)
+
+To avoid Chrome’s “Dangerous site” warning when returning from Schwab login, use your **custom domain** (e.g. `https://api.avi-marketdata.xyz`) for the callback instead of the raw Elastic Beanstalk URL.
+
+1. **Set the callback URL on Beanstalk** (one-time or after env reset):
+   ```bash
+   ./scripts/set-schwab-callback-url.sh
+   ```
+   This sets `SCHWAB_TOS_CALLBACK_URL=https://api.avi-marketdata.xyz/schwab/callback` on the current EB environment. To use a different URL, run:
+   ```bash
+   SCHWAB_TOS_CALLBACK_URL=https://your-domain.com/schwab/callback ./scripts/set-schwab-callback-url.sh
+   ```
+
+2. **Register the same URL in the Schwab developer portal:**
+   - Go to [developer.schwab.com](https://developer.schwab.com) (or [beta-developer.schwab.com](https://beta-developer.schwab.com)).
+   - Open your app → **Callback URL** / **Redirect URI**.
+   - Set it to exactly: `https://api.avi-marketdata.xyz/schwab/callback` (no trailing slash). Save.
+
+3. **Use the app via the custom domain** when doing Schwab setup:
+   - Open the app at **https://api.avi-marketdata.xyz** (not the `*.elasticbeanstalk.com` URL).
+   - Use “Open Schwab and log in” from there. After Schwab login you’ll be redirected to `api.avi-marketdata.xyz/schwab/callback`, which the app will handle and exchange the code.
+
+Ensure your custom domain (e.g. Cloudflare Tunnel or CNAME) points to the same Beanstalk app so the callback request hits your app.
+
 ---
 
 ## One-time setup

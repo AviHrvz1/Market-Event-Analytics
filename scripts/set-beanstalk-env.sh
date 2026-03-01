@@ -23,6 +23,10 @@ for key in PRIXE_API_KEY SCHWAB_TOS_API_KEY SCHWAB_TOS_API_SECRET SCHWAB_TOS_REF
   val="${!key:-}"
   [ -n "$val" ] && VARS+=( "$key=$val" )
 done
+# Callback URL: use custom domain on EB to avoid Chrome "Dangerous site" (Option B)
+key=SCHWAB_TOS_CALLBACK_URL
+val="${!key:-https://api.avi-marketdata.xyz/schwab/callback}"
+[ -n "$val" ] && VARS+=( "$key=$val" )
 # Optional
 for key in SCHWAB_TOS_APP_MACHINE_NAME SCHWAB_HEARTBEAT_INTERVAL_HOURS MAX_ARTICLES_TO_PROCESS PRIXE_PRICE_ENDPOINT PRIXE_BASE_URL; do
   val="${!key:-}"

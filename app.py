@@ -250,6 +250,19 @@ def schwab_setup_page():
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
     return resp
 
+
+@app.route('/schwab/callback')
+def schwab_oauth_callback():
+    """
+    OAuth callback: Schwab redirects here after login with ?code=...&session=...
+    Renders a page that auto-exchanges the code for a refresh token via the API, or shows the URL for manual paste.
+    """
+    redirect_url = request.url
+    resp = make_response(render_template('schwab_callback.html', redirect_url=redirect_url))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    return resp
+
+
 @app.route('/api/pine-script/bearish-date')
 def get_bearish_date_pine_script():
     """Generate Pine Script for drawing vertical line at bearish date"""
