@@ -29,6 +29,8 @@ Set these in the Beanstalk environment (Console → your app → Configuration �
 | `SCHWAB_TOS_REFRESH_TOKEN` | Schwab OAuth refresh token (or use file locally; on Beanstalk use env) |
 | `CLAUDE_API_KEY` | Claude AI (optional) |
 | `NEWS_API_KEY` | NewsAPI (optional) |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token for profit alerts |
+| `TELEGRAM_CHAT_ID` | Telegram chat ID to receive alerts |
 
 Optional: `SCHWAB_TOS_APP_MACHINE_NAME`, `SCHWAB_HEARTBEAT_INTERVAL_HOURS`, `MAX_ARTICLES_TO_PROCESS`, `PRIXE_PRICE_ENDPOINT`, `PRIXE_BASE_URL`.
 

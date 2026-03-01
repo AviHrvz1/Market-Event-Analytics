@@ -42,12 +42,14 @@ from config import (
     SCHWAB_HEARTBEAT_INTERVAL_HOURS,
 )
 
-# Telegram configuration (from app_secrets.py so keys stay out of git)
+# Telegram configuration (env on EB; app_secrets locally)
+_telegram_token = _telegram_chat = None
 try:
-    from app_secrets import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+    from app_secrets import TELEGRAM_BOT_TOKEN as _telegram_token, TELEGRAM_CHAT_ID as _telegram_chat
 except ImportError:
-    TELEGRAM_BOT_TOKEN = "your_telegram_bot_token"
-    TELEGRAM_CHAT_ID = "your_telegram_chat_id"
+    pass
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') or _telegram_token or "your_telegram_bot_token"
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID') or _telegram_chat or "your_telegram_chat_id"
 
 def send_telegram_alert(ticker, strategy_label, net_profit):
     """Send alert via Telegram when position exceeds threshold"""
@@ -2144,7 +2146,37 @@ _monitored_tickers = set()  # Set of ticker symbols
 _monitoring_thread = None
 _monitoring_active = False
 _alert_queue = queue.Queue()
-_telegram_alerts_enabled = False
+
+def _telegram_enabled_file():
+    """Path to persist Telegram toggle state (survives worker restarts)."""
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+    except OSError:
+        pass
+    return os.path.join(data_dir, 'telegram_enabled.txt')
+
+def _load_telegram_enabled():
+    """Load persisted Telegram enabled state."""
+    try:
+        path = _telegram_enabled_file()
+        if os.path.isfile(path):
+            with open(path, 'r') as f:
+                return f.read().strip().lower() in ('1', 'true', 'yes')
+    except Exception:
+        pass
+    return False
+
+def _save_telegram_enabled(enabled):
+    """Persist Telegram enabled state."""
+    try:
+        path = _telegram_enabled_file()
+        with open(path, 'w') as f:
+            f.write('1' if enabled else '0')
+    except Exception as e:
+        print(f"[Monitor] Could not persist Telegram state: {e}", flush=True)
+
+_telegram_alerts_enabled = _load_telegram_enabled()
 
 def _monitor_positions_loop():
     """Background thread that checks monitored tickers every 5 minutes"""
@@ -3370,6 +3402,7 @@ def telegram_toggle():
     data = request.get_json() or {}
     enabled = data.get('enabled', False)
     _telegram_alerts_enabled = bool(enabled)
+    _save_telegram_enabled(_telegram_alerts_enabled)
     print(f"[Monitor] Telegram alerts {'enabled' if _telegram_alerts_enabled else 'disabled'}", flush=True)
     return jsonify({'ok': True, 'enabled': _telegram_alerts_enabled})
 
