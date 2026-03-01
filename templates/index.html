@@ -3525,8 +3525,11 @@
             if (e.target === this) closeSystemIssues();
         });
 
+        function isSchwabTokenIssue(issue) {
+            return issue && (issue.code === 'schwab_token_missing' || issue.code === 'schwab_token_expired' || issue.code === 'schwab_token_error');
+        }
         function showSystemIssues(issues, data) {
-            if (!issues || issues.length === 0) return;
+            if (!issues || !Array.isArray(issues) || issues.length === 0) return;
             data = data || {};
             const overlay = document.getElementById('system-issues-overlay');
             const titleEl = document.getElementById('system-issues-title');
@@ -3537,8 +3540,8 @@
             const listEl = document.getElementById('system-issues-list');
             const iconEl = document.getElementById('system-issues-icon');
             const checkAgainBtn = document.getElementById('system-issues-check-again-btn');
-            const hasTunnel = issues.some(function(i) { return i.code === 'tunnel_unreachable'; });
-            const hasSchwabTokenIssue = issues.some(function(i) { return i.code === 'schwab_token_expired' || i.code === 'schwab_token_missing'; });
+            const hasTunnel = issues.some(function(i) { return i && i.code === 'tunnel_unreachable'; });
+            const hasSchwabTokenIssue = issues.some(isSchwabTokenIssue);
             titleEl.textContent = issues.length === 1 && hasTunnel
                 ? 'Cannot reach server'
                 : 'Setup or connection issue';
@@ -3551,7 +3554,7 @@
                 if (authInput) authInput.value = '';
                 if (authStatus) authStatus.textContent = '';
                 var authContent = document.getElementById('system-issues-auth-content');
-                var url = data.schwab_authorize_url || (issues.filter(function(i) { return i.authorize_url; })[0] || {}).authorize_url;
+                var url = data.schwab_authorize_url || (issues.filter(function(i) { return i && i.authorize_url; })[0] || {}).authorize_url;
                 if (authContent && hasSchwabTokenIssue) {
                     var step1Html = '<div class="issue-title">Fix token in this page</div>' +
                         '<div class="issue-message" style="margin-bottom: 10px;"><strong>Step 1 — Link to open:</strong> Go to this link in your browser and log in at Schwab. Then you will be redirected; copy that new URL and paste it in Step 2.</div>';
@@ -3571,19 +3574,20 @@
                 }
             }
             listEl.innerHTML = '';
-            var schwabUrl = data.schwab_authorize_url || (issues.filter(function(i) { return i.authorize_url; })[0] || {}).authorize_url;
-            var onlySchwabIssues = issues.length > 0 && issues.every(function(i) { return i.code === 'schwab_token_missing' || i.code === 'schwab_token_expired'; });
+            var schwabUrl = data.schwab_authorize_url || (issues.filter(function(i) { return i && i.authorize_url; })[0] || {}).authorize_url;
+            var onlySchwabIssues = issues.length > 0 && issues.every(isSchwabTokenIssue);
             if (onlySchwabIssues) {
                 listEl.style.display = 'none';
             } else {
                 listEl.style.display = 'block';
             }
             issues.forEach(function(issue) {
+                if (!issue || typeof issue !== 'object') return;
                 const div = document.createElement('div');
                 div.className = 'system-issue-block';
-                let html = '<div class="issue-title">' + (issue.title || issue.code) + '</div>';
-                if (issue.code === 'schwab_token_missing' || issue.code === 'schwab_token_expired') {
-                    var link = issue.authorize_url || schwabUrl;
+                let html = '<div class="issue-title">' + (issue.title || issue.code || 'Issue') + '</div>';
+                if (isSchwabTokenIssue(issue)) {
+                    var link = (issue && issue.authorize_url) || schwabUrl;
                     if (link) {
                         html += '<div class="system-issue-link" style="margin: 10px 0;"><a href="' + escapeHtml(link) + '" target="_blank" rel="noopener" style="display: inline-block; padding: 10px 18px; background: #0066cc; color: #fff; text-decoration: none; border-radius: 6px; font-weight: bold;">Open Schwab and log in</a></div>';
                     } else {
@@ -3594,7 +3598,7 @@
                 }
                 if (issue.message) html += '<div class="issue-message">' + escapeHtml(issue.message) + '</div>';
                 if (issue.instruction) html += '<div class="issue-instruction"><strong>What to do:</strong> ' + escapeHtml(issue.instruction) + '</div>';
-                if (issue.command && issue.code !== 'schwab_token_missing' && issue.code !== 'schwab_token_expired') {
+                if (issue.command && !isSchwabTokenIssue(issue)) {
                     html += '<div class="system-issue-command">' + escapeHtml(issue.command) +
                         ' <button type="button" class="copy-cmd-btn" data-cmd="' + escapeHtml(issue.command) + '">Copy</button></div>';
                 }
@@ -3631,7 +3635,7 @@
                     var data = result.data || {};
                     var issues = data.issues || [];
                     if (issues.length === 0) return;
-                    var onlySchwab = issues.every(function(i) { return i.code === 'schwab_token_missing' || i.code === 'schwab_token_expired'; });
+                    var onlySchwab = issues.every(function(i) { return isSchwabTokenIssue(i); });
                     if (onlySchwab) {
                         window.location.href = '/schwab-setup';
                         return;
