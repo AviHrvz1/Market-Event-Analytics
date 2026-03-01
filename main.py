@@ -8211,9 +8211,27 @@ If you cannot find information for this ticker, return:
         cache_key = '_stocks_json_cache'
         cache_mtime_key = '_stocks_json_mtime'
         
-        # Check if JSON file exists
+        # If stocks.json is missing (e.g. on EB where *.json is gitignored), use built-in default
         if not json_path.exists():
-            raise FileNotFoundError(f"stocks.json not found at {json_path}. Please create the file with stock data.")
+            _default = getattr(self, '_stocks_json_default', None)
+            if _default is None:
+                _default = {
+                    'IBM': {'name': 'International Business Machines Corp', 'industry': 'Technology', 'market_cap': 200000},
+                    'AAPL': {'name': 'Apple Inc', 'industry': 'Technology', 'market_cap': 3000000},
+                    'MSFT': {'name': 'Microsoft Corporation', 'industry': 'Technology', 'market_cap': 3000000},
+                    'GOOGL': {'name': 'Alphabet Inc', 'industry': 'Technology', 'market_cap': 2000000},
+                    'AMZN': {'name': 'Amazon.com Inc', 'industry': 'Technology', 'market_cap': 1500000},
+                    'META': {'name': 'Meta Platforms Inc', 'industry': 'Technology', 'market_cap': 1200000},
+                    'NVDA': {'name': 'NVIDIA Corporation', 'industry': 'Technology', 'market_cap': 2000000},
+                    'TSLA': {'name': 'Tesla Inc', 'industry': 'Technology', 'market_cap': 800000},
+                    'JPM': {'name': 'JPMorgan Chase & Co', 'industry': 'Financials', 'market_cap': 500000},
+                    'V': {'name': 'Visa Inc', 'industry': 'Financials', 'market_cap': 600000},
+                    'WMT': {'name': 'Walmart Inc', 'industry': 'Consumer', 'market_cap': 500000},
+                    'JNJ': {'name': 'Johnson & Johnson', 'industry': 'Healthcare', 'market_cap': 400000},
+                    'UNH': {'name': 'UnitedHealth Group Inc', 'industry': 'Healthcare', 'market_cap': 500000},
+                }
+                setattr(self, '_stocks_json_default', _default)
+            return _default
         
         # Get current file modification time
         current_mtime = os.path.getmtime(json_path)
