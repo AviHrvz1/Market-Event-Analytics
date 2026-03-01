@@ -3934,16 +3934,8 @@
             .catch(err => console.error('[Monitor] Toggle failed:', err));
         }
 
-        const PROFIT_TOAST_MAX_AGE_MS = 5 * 60 * 1000;  // 5 minutes
-
-        function clearOldProfitToasts() {
-            const now = Date.now();
-            document.querySelectorAll('.toastify.profit-toast').forEach(el => {
-                const created = parseInt(el.dataset.profitCreated, 10);
-                if (isNaN(created) || (now - created) > PROFIT_TOAST_MAX_AGE_MS) {
-                    el.remove();
-                }
-            });
+        function clearAllProfitToasts() {
+            document.querySelectorAll('.toastify').forEach(el => el.remove());
         }
 
         function flushPendingAlerts() {
@@ -3954,7 +3946,7 @@
             const alerts = _pendingAlerts.slice();
             _pendingAlerts = [];
             if (alerts.length === 0) return;
-            clearOldProfitToasts();
+            clearAllProfitToasts();
             alerts.forEach(a => {
                 const displayKey = a.ticker_expiration || a.ticker;
                 showProfitAlert(displayKey, a.strategies, a.net_profit, a.timestamp, a.detail_index);
