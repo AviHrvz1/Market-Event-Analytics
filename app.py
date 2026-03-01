@@ -125,7 +125,9 @@ app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB upload limit
 def favicon():
     """Serve favicon for browser tab icon (many browsers request this URL by default)."""
     static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
-    return send_from_directory(static_dir, 'favicon.ico', mimetype='image/x-icon')
+    resp = send_from_directory(static_dir, 'favicon.ico', mimetype='image/x-icon')
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    return resp
 
 # Schwab API token cache
 _schwab_token_lock = Lock()
