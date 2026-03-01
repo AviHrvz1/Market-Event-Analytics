@@ -3934,8 +3934,16 @@
             .catch(err => console.error('[Monitor] Toggle failed:', err));
         }
 
-        function clearAllProfitToasts() {
-            document.querySelectorAll('.toastify').forEach(el => el.remove());
+        const PROFIT_TOAST_MAX_AGE_MS = 5 * 60 * 1000;  // 5 minutes
+
+        function clearOldProfitToasts() {
+            const now = Date.now();
+            document.querySelectorAll('.toastify.profit-toast').forEach(el => {
+                const created = parseInt(el.dataset.profitCreated, 10);
+                if (isNaN(created) || (now - created) > PROFIT_TOAST_MAX_AGE_MS) {
+                    el.remove();
+                }
+            });
         }
 
         function flushPendingAlerts() {
@@ -3946,7 +3954,7 @@
             const alerts = _pendingAlerts.slice();
             _pendingAlerts = [];
             if (alerts.length === 0) return;
-            clearAllProfitToasts();
+            clearOldProfitToasts();
             alerts.forEach(a => {
                 const displayKey = a.ticker_expiration || a.ticker;
                 showProfitAlert(displayKey, a.strategies, a.net_profit, a.timestamp, a.detail_index);
@@ -3990,6 +3998,7 @@
         function showProfitAlert(ticker, strategies, netProfit, timestamp, detailIndex) {
             console.log(`[Monitor] Showing toast for ${ticker}: $${netProfit.toFixed(2)}`);
             const timeInfo = timestamp ? `\n\nTriggered: ${timestamp}` : '';
+            const beforeCount = document.querySelectorAll('.toastify').length;
             Toastify({
                 text: `🔔 Profit Alert!\n${ticker}: ${strategies}\nNet Profit: +$${netProfit.toFixed(2)}${timeInfo}`,
                 duration: -1,  // Manual dismiss
@@ -4002,6 +4011,12 @@
                     highlightTickerStrategy(ticker, strategies, detailIndex);
                 }
             }).showToast();
+            const toasts = document.querySelectorAll('.toastify');
+            const lastToast = toasts[toasts.length - 1];
+            if (lastToast && toasts.length > beforeCount) {
+                lastToast.classList.add('profit-toast');
+                lastToast.dataset.profitCreated = String(Date.now());
+            }
         }
 
         function highlightTickerStrategy(ticker, strategies, detailIndex) {
