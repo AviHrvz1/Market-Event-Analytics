@@ -98,6 +98,10 @@
             background-color: #ffeb3b !important;
         }
 
+        .profit-alert-ticker-highlight {
+            background-color: #ffeb3b !important;
+        }
+
         .controls {
             padding: 20px 30px;
             background: #f8f9fa;
@@ -3870,6 +3874,8 @@
         let alertEventSource = null;
         let _pendingAlerts = [];
         let _alertDebounceTimer = null;
+        let _lastAlertBatchTime = 0;
+        const HIGHLIGHT_CLEAR_INTERVAL_MS = 5 * 60 * 1000;
         let masterBellsEnabled = false;
         let telegramEnabled = false;
 
@@ -3934,8 +3940,33 @@
             .catch(err => console.error('[Monitor] Toggle failed:', err));
         }
 
-        function clearAllProfitToasts() {
-            document.querySelectorAll('.toastify').forEach(el => el.remove());
+        function clearOldTickerHighlights() {
+            const body = document.getElementById('positions-analytics-body');
+            if (!body) return;
+            body.querySelectorAll('tr[data-position-row="parent"].profit-alert-ticker-highlight').forEach(function (row) {
+                row.classList.remove('profit-alert-ticker-highlight');
+                delete row.dataset.alertStrategies;
+                delete row.dataset.alertDetailIndex;
+            });
+        }
+
+        function highlightTickerRow(ticker, strategies, netProfit, timestamp, detailIndex) {
+            const body = document.getElementById('positions-analytics-body');
+            if (!body || !ticker) return;
+            const tickerUpper = String(ticker).trim().toUpperCase();
+            if (!tickerUpper) return;
+            const isTickerExpiration = ticker.indexOf(' (') !== -1;
+            const parentRows = body.querySelectorAll('tr[data-position-row="parent"]');
+            for (const row of parentRows) {
+                if (row.style.display === 'none') continue;
+                const rowKey = (isTickerExpiration ? (row.dataset.tickerExpiration || '') : (row.dataset.ticker || '')).trim().toUpperCase();
+                if (rowKey === tickerUpper) {
+                    row.classList.add('profit-alert-ticker-highlight');
+                    row.dataset.alertStrategies = strategies || '';
+                    row.dataset.alertDetailIndex = detailIndex != null ? String(detailIndex) : '';
+                    break;
+                }
+            }
         }
 
         function flushPendingAlerts() {
@@ -3946,10 +3977,14 @@
             const alerts = _pendingAlerts.slice();
             _pendingAlerts = [];
             if (alerts.length === 0) return;
-            clearAllProfitToasts();
+            const now = Date.now();
+            if (now - _lastAlertBatchTime > HIGHLIGHT_CLEAR_INTERVAL_MS) {
+                clearOldTickerHighlights();
+            }
+            _lastAlertBatchTime = now;
             alerts.forEach(a => {
                 const displayKey = a.ticker_expiration || a.ticker;
-                showProfitAlert(displayKey, a.strategies, a.net_profit, a.timestamp, a.detail_index);
+                highlightTickerRow(displayKey, a.strategies, a.net_profit, a.timestamp, a.detail_index);
             });
         }
 
@@ -3985,30 +4020,6 @@
                     }, 5000);
                 }
             };
-        }
-
-        function showProfitAlert(ticker, strategies, netProfit, timestamp, detailIndex) {
-            console.log(`[Monitor] Showing toast for ${ticker}: $${netProfit.toFixed(2)}`);
-            const timeInfo = timestamp ? `\n\nTriggered: ${timestamp}` : '';
-            const beforeCount = document.querySelectorAll('.toastify').length;
-            Toastify({
-                text: `🔔 Profit Alert!\n${ticker}: ${strategies}\nNet Profit: +$${netProfit.toFixed(2)}${timeInfo}`,
-                duration: -1,  // Manual dismiss
-                close: true,
-                gravity: "top",
-                position: "right",
-                backgroundColor: "linear-gradient(to right, #00b09b, #96c93d)",
-                stopOnFocus: true,
-                onClick: function() {
-                    highlightTickerStrategy(ticker, strategies, detailIndex);
-                }
-            }).showToast();
-            const toasts = document.querySelectorAll('.toastify');
-            const lastToast = toasts[toasts.length - 1];
-            if (lastToast && toasts.length > beforeCount) {
-                lastToast.classList.add('profit-toast');
-                lastToast.dataset.profitCreated = String(Date.now());
-            }
         }
 
         function highlightTickerStrategy(ticker, strategies, detailIndex) {
@@ -4825,9 +4836,18 @@
                             <td style="padding: 8px 6px; text-align: center;">${bellIcon}</td>
                         `;
                         row.addEventListener('click', (e) => {
-                            if (!e.target.classList.contains('bell-icon')) {
-                                togglePositionsDetails(detailsId);
+                            if (e.target.classList.contains('bell-icon')) return;
+                            if (row.classList.contains('profit-alert-ticker-highlight')) {
+                                const key = (row.dataset.tickerExpiration || row.dataset.ticker || '').trim();
+                                const strategies = row.dataset.alertStrategies || '';
+                                const detailIndex = row.dataset.alertDetailIndex;
+                                highlightTickerStrategy(key, strategies, detailIndex);
+                                row.classList.remove('profit-alert-ticker-highlight');
+                                delete row.dataset.alertStrategies;
+                                delete row.dataset.alertDetailIndex;
+                                return;
                             }
+                            togglePositionsDetails(detailsId);
                         });
 
                         const detailsRow = document.createElement('tr');
