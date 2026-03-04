@@ -4022,31 +4022,8 @@
             };
         }
 
-        function highlightTickerStrategy(ticker, strategies, detailIndex) {
-            console.log(`[Monitor] Highlighting ${ticker}`, strategies, detailIndex);
-            const body = document.getElementById('positions-analytics-body');
-            if (!body || !ticker) return;
-            const tickerUpper = String(ticker).trim().toUpperCase();
-            if (!tickerUpper) return;
-
-            // Close all accordions and open only this ticker's
-            openTickerAccordion(ticker);
-
-            // Find the parent row and its details row (match by ticker_expiration or ticker)
-            const isTickerExpiration = ticker.indexOf(' (') !== -1;
-            const parentRows = body.querySelectorAll('tr[data-position-row="parent"]');
-            let detailsRow = null;
-            for (const row of parentRows) {
-                if (row.style.display === 'none') continue;
-                const rowKey = (isTickerExpiration ? (row.dataset.tickerExpiration || '') : (row.dataset.ticker || '')).trim().toUpperCase();
-                if (rowKey === tickerUpper) {
-                    const detailsId = row.dataset.detailsId;
-                    if (detailsId) detailsRow = document.getElementById(detailsId);
-                    break;
-                }
-            }
-            if (!detailsRow || detailsRow.style.display === 'none') return;
-
+        function doStrategyHighlight(body, detailsRow, strategies, detailIndex) {
+            if (!body || !detailsRow) return;
             // Clear previous highlight from any position row (inside trade-details tables) and parent rows
             body.querySelectorAll('.profit-alert-highlight').forEach(function (el) {
                 el.classList.remove('profit-alert-highlight');
@@ -4079,10 +4056,23 @@
             if (targetTr) {
                 targetTr.classList.add('profit-alert-highlight');
                 targetTr.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                setTimeout(function () {
+                targetTr.addEventListener('click', function clearHighlight(e) {
+                    e.stopPropagation();
                     targetTr.classList.remove('profit-alert-highlight');
-                }, 3000);
+                }, { once: true });
             }
+        }
+
+        function highlightTickerStrategy(ticker, strategies, detailIndex) {
+            console.log(`[Monitor] Highlighting ${ticker}`, strategies, detailIndex);
+            const body = document.getElementById('positions-analytics-body');
+            if (!body || !ticker) return;
+            const tickerUpper = String(ticker).trim().toUpperCase();
+            if (!tickerUpper) return;
+
+            openTickerAccordion(ticker, function (detailsRow) {
+                doStrategyHighlight(body, detailsRow, strategies, detailIndex);
+            });
         }
 
         function getVisiblePositionKeys() {
@@ -4418,7 +4408,7 @@
             `;
         }
 
-        function fetchPositionsCloseValue(ticker, detailsId, position, positionIndex) {
+        function fetchPositionsCloseValue(ticker, detailsId, position, positionIndex, onComplete) {
             const detailsRow = document.getElementById(detailsId);
             if (!detailsRow) return;
             const loadingEl = document.getElementById(detailsId + '-close-loading');
@@ -4437,6 +4427,7 @@
                     if (data.error && (!data.strategies || data.strategies.length === 0)) {
                         if (errorEl) { errorEl.textContent = data.error || 'Could not load close value.'; errorEl.style.display = 'block'; }
                         if (data.error && /token|Schwab|expired|invalid/i.test(data.error)) checkSystemStatus();
+                        if (onComplete) onComplete(detailsRow);
                         return;
                     }
                     const td = detailsRow.querySelector('td');
@@ -4449,11 +4440,13 @@
                             newRefresh.addEventListener('click', (e) => { e.stopPropagation(); fetchPositionsCloseValue(ticker, detailsId, position, positionIndex); });
                         }
                     }
+                    if (onComplete) onComplete(detailsRow);
                 })
                 .catch(err => {
                     if (loadingEl) loadingEl.style.display = 'none';
                     if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.textContent = 'Refresh prices'; }
                     if (errorEl) { errorEl.textContent = 'Could not load close value. Try again.'; errorEl.style.display = 'block'; }
+                    if (onComplete) onComplete(detailsRow);
                 });
         }
 
@@ -4476,7 +4469,7 @@
             }
         }
 
-        function openTickerAccordion(tickerOrTickerExpiration) {
+        function openTickerAccordion(tickerOrTickerExpiration, onAfterOpen) {
             const body = document.getElementById('positions-analytics-body');
             if (!body || !tickerOrTickerExpiration) return;
             const value = String(tickerOrTickerExpiration).trim();
@@ -4507,8 +4500,12 @@
                     if (position.status === 'Open' && t && detailsRow.dataset.closeValueLoaded !== 'true') {
                         const loadingEl = document.getElementById(detailsId + '-close-loading');
                         if (loadingEl) loadingEl.style.display = 'block';
-                        fetchPositionsCloseValue(t, detailsId, position, positionIndex);
+                        fetchPositionsCloseValue(t, detailsId, position, positionIndex, onAfterOpen);
+                    } else if (onAfterOpen) {
+                        setTimeout(function() { onAfterOpen(detailsRow); }, 0);
                     }
+                } else if (onAfterOpen) {
+                    setTimeout(function() { onAfterOpen(detailsRow); }, 0);
                 }
                 return;
             }
