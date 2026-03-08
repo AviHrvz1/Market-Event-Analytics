@@ -135,9 +135,24 @@
             border-radius: 4px;
             border: 1px solid #d0d7e8;
         }
+        .positions-ticker-tag-wrap {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
         .positions-ticker-tag-link {
             cursor: pointer;
             display: inline-block;
+        }
+        .positions-ticker-remove-btn {
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+            color: #666;
+            padding: 0 2px;
+        }
+        .positions-ticker-remove-btn:hover {
+            color: #c62828;
         }
 
         .stats {
@@ -4545,7 +4560,10 @@
                         item: function (data, escape) {
                             var val = (data.value != null ? data.value : '');
                             var text = (data.text != null ? data.text : val);
-                            return '<span class="positions-ticker-tag-link" data-ticker-expiration="' + escape(String(val)) + '" title="Click to open accordion">' + escape(String(text)) + '</span>';
+                            return '<span class="positions-ticker-tag-wrap" data-ticker-expiration="' + escape(String(val)) + '">' +
+                                '<span class="positions-ticker-tag-link" title="Click to open accordion">' + escape(String(text)) + '</span>' +
+                                '<span class="positions-ticker-remove-btn" title="Remove from filter">×</span>' +
+                                '</span>';
                         }
                     }
                 });
@@ -4555,11 +4573,27 @@
                 });
                 if (filterContainer && !filterContainer.dataset.tickerTagClickBound) {
                     filterContainer.addEventListener('click', function (e) {
+                        const removeBtn = e.target.closest && e.target.closest('.positions-ticker-remove-btn');
+                        if (removeBtn) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const wrap = removeBtn.closest && removeBtn.closest('.positions-ticker-tag-wrap');
+                            const val = wrap ? wrap.getAttribute('data-ticker-expiration') : null;
+                            if (val && confirm('Remove ' + val + ' from filter?')) {
+                                if (positionsTickerTomSelect) {
+                                    positionsTickerTomSelect.removeItem(val);
+                                    applyPositionsTickerFilter();
+                                    savePositionsTickerFilterToServer();
+                                }
+                            }
+                            return false;
+                        }
                         const link = e.target.closest && e.target.closest('.positions-ticker-tag-link');
                         if (link) {
                             e.preventDefault();
                             e.stopPropagation();
-                            const val = link.getAttribute('data-ticker-expiration');
+                            const wrap = link.closest && link.closest('.positions-ticker-tag-wrap');
+                            const val = wrap ? wrap.getAttribute('data-ticker-expiration') : null;
                             if (val) openTickerAccordion(val);
                             return false;
                         }
