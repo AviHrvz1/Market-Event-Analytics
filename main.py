@@ -124,6 +124,7 @@ def parse_positions_analytics(csv_path: str) -> Dict[str, object]:
     header_map = None
     positions = []
     active_groups: Dict[str, Dict] = {}
+    fees_by_date: Dict[str, float] = {}
 
     def parse_amount(value: str) -> Decimal:
         if value is None:
@@ -589,6 +590,16 @@ def parse_positions_analytics(csv_path: str) -> Dict[str, object]:
             description = get_field('DESCRIPTION')
             ref_number = get_field('REF #')
             amount = parse_amount(get_field('AMOUNT'))
+            misc_fees = parse_amount(get_field('Misc Fees'))
+            comm_fees = parse_amount(get_field('Commissions & Fees'))
+            fee_total = float(misc_fees) + float(comm_fees)
+            if fee_total != 0:
+                try:
+                    dt = datetime.strptime(date_str, '%m/%d/%y')
+                    date_key = dt.strftime('%Y-%m-%d')
+                    fees_by_date[date_key] = fees_by_date.get(date_key, 0.0) + abs(fee_total)
+                except (ValueError, TypeError):
+                    pass
 
             qty = parse_qty_from_description(description)
             ticker = extract_ticker(description)
@@ -1015,7 +1026,7 @@ def parse_positions_analytics(csv_path: str) -> Dict[str, object]:
         'avg_closed_pl': float(avg_closed_pl)
     }
 
-    return {'positions': positions, 'summary': summary}
+    return {'positions': positions, 'summary': summary, 'fees_by_date': fees_by_date}
 
 
 class LayoffTracker:

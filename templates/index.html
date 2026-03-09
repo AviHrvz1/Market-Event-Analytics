@@ -3881,6 +3881,7 @@
 
         let positionsAnalyticsLoaded = false;
         let positionsAnalyticsData = [];
+        let positionsAnalyticsFeesByDate = {};
         let positionsTickerTomSelect = null;
         let positionsUploadInProgress = false;
 
@@ -4695,11 +4696,11 @@
                 ? new Set(selectedTickers.map(function (t) { return String(t).trim().toUpperCase(); }))
                 : null;
             const targetParts = (dateStr || '').split('-');
-            if (targetParts.length !== 3) return { total: 0, byTicker: {} };
+            if (targetParts.length !== 3) return { total: 0, byTicker: {}, totalFees: 0, totalAfterFees: 0 };
             const targetY = parseInt(targetParts[0], 10);
             const targetM = parseInt(targetParts[1], 10);
             const targetD = parseInt(targetParts[2], 10);
-            if (isNaN(targetY) || isNaN(targetM) || isNaN(targetD)) return { total: 0, byTicker: {} };
+            if (isNaN(targetY) || isNaN(targetM) || isNaN(targetD)) return { total: 0, byTicker: {}, totalFees: 0, totalAfterFees: 0 };
 
             let total = 0;
             const byTicker = {};
@@ -4716,7 +4717,9 @@
                     byTicker[te] = (byTicker[te] || 0) + profit;
                 });
             });
-            return { total: total, byTicker: byTicker };
+            const totalFees = Number(positionsAnalyticsFeesByDate[dateStr]) || 0;
+            const totalAfterFees = total - totalFees;
+            return { total: total, byTicker: byTicker, totalFees: totalFees, totalAfterFees: totalAfterFees };
         }
 
         function runProfitForSearch() {
@@ -4740,9 +4743,10 @@
             const monthIdx = parts.length >= 2 ? parseInt(parts[1], 10) - 1 : 0;
             const dateLabel = (isNaN(day) || isNaN(monthIdx) ? dateStr : day + ' ' + (months[monthIdx] || '')) || dateStr;
             const totalText = formatPositionsAmount(out.total);
+            const afterFeesText = formatPositionsAmount(out.totalAfterFees);
             const tickerParts = Object.keys(out.byTicker).sort().map(function (t) { return t + ': ' + formatPositionsAmount(out.byTicker[t]); });
             const tickerStr = tickerParts.length > 0 ? tickerParts.join(', ') : 'No closed pairs on this date.';
-            resultEl.innerHTML = 'Total net profit (' + dateLabel + '): <strong>' + totalText + '</strong> - ' + tickerStr;
+            resultEl.innerHTML = 'Total net profit (' + dateLabel + '): <strong>' + totalText + '</strong> (<span style="color: #2563eb;">' + afterFeesText + '</span>) - ' + tickerStr;
         }
 
         function uploadPositionsAnalyticsCsv() {
@@ -4830,6 +4834,7 @@
 
                     body.innerHTML = '';
                     positionsAnalyticsData = positions;
+                    positionsAnalyticsFeesByDate = data.fees_by_date || {};
                     populatePositionsTickerOptions(positions);
                     updatePositionsSummary(data.summary);
 

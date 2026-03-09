@@ -1605,6 +1605,7 @@ def get_positions_analytics():
         result = parse_positions_analytics(csv_path)
         positions = result.get('positions', [])
         summary = result.get('summary', {})
+        fees_by_date = result.get('fees_by_date', {})
         filename = 'AccountStatement.csv'
         upload_info_path = os.path.join(_get_data_dir(), 'positions_upload_info.json')
         if os.path.exists(upload_info_path):
@@ -1614,7 +1615,7 @@ def get_positions_analytics():
                     filename = info.get('original_filename', filename)
             except Exception:
                 pass
-        return jsonify({'positions': positions, 'summary': summary, 'total': len(positions), 'filename': filename})
+        return jsonify({'positions': positions, 'summary': summary, 'fees_by_date': fees_by_date, 'total': len(positions), 'filename': filename})
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
