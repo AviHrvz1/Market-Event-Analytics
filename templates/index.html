@@ -1586,6 +1586,7 @@
                         </div>
                         <button id="positions-ticker-clear" style="padding: 6px 12px; border: none; border-radius: 6px; background: #e0e0e0; color: #333; cursor: pointer; font-size: 0.85em;">Clear</button>
                         <span id="positions-next-update" style="display: none; font-size: 0.85em; color: #888; margin-left: 8px;">Next update in: <span id="positions-countdown">5:00</span></span>
+                        <a id="positions-refresh-now-btn" href="#" style="font-size: 0.85em; margin-left: 8px; color: #667eea; text-decoration: underline; cursor: pointer; display: none;">Get alerts now</a>
                     </div>
                     <div id="positions-analytics-status" style="color: #666; font-size: 0.95em;">Loading positions...</div>
                 </div>
@@ -4078,7 +4079,7 @@
             }
             function costStyle(cost) {
                 const n = Number(cost);
-                if (n > 0 && n < 0.12) return 'color: #ca8a04; background: #fef9c3;';
+                if ((n > 0 && n < 0.12) || n < 0) return 'color: #ca8a04; background: #fef9c3;';
                 return '';
             }
             function rowHtml(struct, bf) {
@@ -4355,6 +4356,19 @@
             loadPositionsAnalytics(true);
         }
 
+        function checkAlertsNow() {
+            if (monitoredTickers.size === 0) return;
+            const refreshBtn = document.getElementById('positions-refresh-now-btn');
+            if (refreshBtn) { refreshBtn.classList.add('disabled'); refreshBtn.style.pointerEvents = 'none'; refreshBtn.style.opacity = '0.6'; }
+            fetch('/api/positions-analytics/monitor/check-all', { method: 'POST', headers: {'Content-Type': 'application/json'} })
+                .then(r => r.json())
+                .then(() => { /* alerts pushed via SSE */ })
+                .catch(err => console.error('[Monitor] Check-all failed:', err))
+                .finally(() => {
+                    if (refreshBtn) { refreshBtn.classList.remove('disabled'); refreshBtn.style.pointerEvents = ''; refreshBtn.style.opacity = ''; }
+                });
+        }
+
         function updatePositionsCountdown() {
             const span = document.getElementById('positions-countdown');
             if (!span) return;
@@ -4368,10 +4382,12 @@
             if (monitoredTickers.size === 0) return;
             if (positionsRefreshTimer) clearInterval(positionsRefreshTimer);
             if (positionsCountdownTimer) clearInterval(positionsCountdownTimer);
-            refreshPositionsData();
+            // Don't refresh immediately - table already has data; next refresh in 5 min
             positionsNextRefreshAt = Date.now() + POSITIONS_REFRESH_INTERVAL_MS;
             const nextUpdateEl = document.getElementById('positions-next-update');
+            const refreshBtn = document.getElementById('positions-refresh-now-btn');
             if (nextUpdateEl) nextUpdateEl.style.display = 'inline';
+            if (refreshBtn) refreshBtn.style.display = 'inline-block';
             updatePositionsCountdown();
             positionsRefreshTimer = setInterval(refreshPositionsData, POSITIONS_REFRESH_INTERVAL_MS);
             positionsCountdownTimer = setInterval(updatePositionsCountdown, 1000);
@@ -4381,7 +4397,9 @@
             if (positionsRefreshTimer) { clearInterval(positionsRefreshTimer); positionsRefreshTimer = null; }
             if (positionsCountdownTimer) { clearInterval(positionsCountdownTimer); positionsCountdownTimer = null; }
             const nextUpdateEl = document.getElementById('positions-next-update');
+            const refreshBtn = document.getElementById('positions-refresh-now-btn');
             if (nextUpdateEl) nextUpdateEl.style.display = 'none';
+            if (refreshBtn) refreshBtn.style.display = 'none';
         }
 
         // Load monitored tickers on page load
@@ -4672,9 +4690,14 @@
                 .catch(() => {});
         }
 
-        // Add click handlers for bell icons
+        // Add click handlers for bell icons and positions refresh button
         document.addEventListener('click', (e) => {
-            if (e.target.classList.contains('bell-icon')) {
+            const refreshBtn = e.target.closest?.('#positions-refresh-now-btn');
+            if (refreshBtn) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!refreshBtn.disabled && !refreshBtn.classList.contains('disabled')) checkAlertsNow();
+            } else if (e.target.classList.contains('bell-icon')) {
                 e.stopPropagation();
                 const key = (e.target.dataset.tickerExpiration || e.target.dataset.ticker || '').trim();
                 if (key) toggleMonitoring(key, e.target);

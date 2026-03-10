@@ -3766,6 +3766,18 @@ def manual_check_ticker():
     result = check_ticker_threshold(ticker)
     return jsonify({'ok': True, 'alert': result})
 
+
+@app.route('/api/positions-analytics/monitor/check-all', methods=['POST'])
+def check_all_monitored_tickers():
+    """Trigger alert check for all monitored tickers. Alerts are pushed via SSE; no table refresh."""
+    if not _monitored_tickers:
+        return jsonify({'ok': True, 'checked': 0})
+    print(f"[Monitor] Manual check-all for {len(_monitored_tickers)} tickers", flush=True)
+    for ticker in list(_monitored_tickers):
+        check_ticker_threshold(ticker)
+    return jsonify({'ok': True, 'checked': len(_monitored_tickers)})
+
+
 @app.route('/api/positions-analytics/monitor/alerts')
 def monitor_alerts_stream():
     """Server-Sent Events stream for real-time alerts"""
