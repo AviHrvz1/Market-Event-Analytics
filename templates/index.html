@@ -3684,8 +3684,8 @@
             listEl.querySelectorAll('.copy-cmd-btn').forEach(function(btn) {
                 btn.addEventListener('click', function() {
                     var cmd = this.getAttribute('data-cmd');
-                    if (cmd && navigator.clipboard && navigator.clipboard.writeText) {
-                        navigator.clipboard.writeText(cmd).then(function() { btn.textContent = 'Copied!'; setTimeout(function() { btn.textContent = 'Copy'; }, 1500); });
+                    if (cmd) {
+                        copyToClipboard(cmd).then(function() { btn.textContent = 'Copied!'; setTimeout(function() { btn.textContent = 'Copy'; }, 1500); });
                     }
                 });
             });
@@ -3698,6 +3698,33 @@
             var d = document.createElement('div');
             d.textContent = s;
             return d.innerHTML;
+        }
+
+        function copyToClipboard(text) {
+            if (!text) return Promise.reject(new Error('No text'));
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                return navigator.clipboard.writeText(text).catch(function() {
+                    return execCommandCopy(text);
+                });
+            }
+            return execCommandCopy(text);
+        }
+        function execCommandCopy(text) {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            try {
+                var ok = document.execCommand('copy');
+                document.body.removeChild(ta);
+                return ok ? Promise.resolve() : Promise.reject(new Error('execCommand failed'));
+            } catch (e) {
+                document.body.removeChild(ta);
+                return Promise.reject(e);
+            }
         }
         function checkSystemStatus() {
             var checkAgainBtn = document.getElementById('system-issues-check-again-btn');
@@ -4266,8 +4293,8 @@
                         e.preventDefault();
                         e.stopPropagation();
                         const copy = icon.getAttribute('data-copy');
-                        if (copy && navigator.clipboard && navigator.clipboard.writeText) {
-                            navigator.clipboard.writeText(copy).then(function () {
+                        if (copy) {
+                            copyToClipboard(copy).then(function () {
                                 icon.classList.remove('pi-copy');
                                 icon.classList.add('pi-check');
                                 icon.title = 'Copied!';
@@ -5302,8 +5329,8 @@
                         e.preventDefault();
                         e.stopPropagation();
                         const copy = icon.getAttribute('data-copy');
-                        if (copy && navigator.clipboard && navigator.clipboard.writeText) {
-                            navigator.clipboard.writeText(copy).then(function () {
+                        if (copy) {
+                            copyToClipboard(copy).then(function () {
                                 icon.classList.remove('pi-copy');
                                 icon.classList.add('pi-check');
                                 icon.title = 'Copied!';
@@ -5962,27 +5989,10 @@
         }
 
         function copyTickerToClipboard(ticker) {
-            navigator.clipboard.writeText(ticker).then(() => {
-                // Show temporary feedback
+            copyToClipboard(ticker).then(() => {
                 const event = new CustomEvent('tickerCopied', { detail: { ticker } });
                 document.dispatchEvent(event);
-            }).catch(err => {
-                console.error('Failed to copy ticker:', err);
-                // Fallback for older browsers
-                const textArea = document.createElement('textarea');
-                textArea.value = ticker;
-                textArea.style.position = 'fixed';
-                textArea.style.opacity = '0';
-                document.body.appendChild(textArea);
-                textArea.select();
-                try {
-                    document.execCommand('copy');
-                    document.body.removeChild(textArea);
-                } catch (err) {
-                    console.error('Fallback copy failed:', err);
-                    document.body.removeChild(textArea);
-                }
-            });
+            }).catch(err => console.error('Failed to copy ticker:', err));
         }
 
         // Listen for ticker copy events to show feedback
