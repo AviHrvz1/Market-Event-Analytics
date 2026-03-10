@@ -1874,8 +1874,7 @@ def _find_butterflies_for_price(strikes: list, price: float, widths: list):
             # Right: pick butterfly whose low is closest to price
             if abs(low - price) <= max_dist and (right_bf is None or abs(low - price) < abs(right_bf[0] - price)):
                 right_bf = (low, mid, high)
-        if left_bf and right_bf:
-            break
+        # Do not break early - iterate all widths to find best left and right (fixes LRCX 190/195/200 for both)
     return (left_bf, right_bf)
 
 
