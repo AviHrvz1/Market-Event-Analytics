@@ -4286,29 +4286,7 @@
             const bodyEl = document.getElementById('butterfly-arbitrage-body');
             if (!statusEl || !tableEl || !bodyEl) return;
 
-            if (!bodyEl.dataset.copyHandlerBound) {
-                bodyEl.addEventListener('click', function (e) {
-                    const icon = e.target.closest && e.target.closest('.butterfly-copy-icon');
-                    if (icon) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const copy = icon.getAttribute('data-copy');
-                        if (copy) {
-                            copyToClipboard(copy).then(function () {
-                                icon.classList.remove('pi-copy');
-                                icon.classList.add('pi-check');
-                                icon.title = 'Copied!';
-                                setTimeout(function () {
-                                    icon.classList.remove('pi-check');
-                                    icon.classList.add('pi-copy');
-                                    icon.title = 'Copy trade to clipboard';
-                                }, 1500);
-                            });
-                        }
-                    }
-                });
-                bodyEl.dataset.copyHandlerBound = 'true';
-            }
+            // Copy icon handled by document-level delegate for HTTP/EB compatibility
 
             if (tickers.length === 0) {
                 statusEl.textContent = 'Select tickers to load butterfly pricing.';
@@ -4717,8 +4695,46 @@
                 .catch(() => {});
         }
 
-        // Add click handlers for bell icons and positions refresh button
+        // Add click handlers for bell icons, positions refresh, and copy icons (document-level for HTTP/EB compatibility)
         document.addEventListener('click', (e) => {
+            const butterflyCopyIcon = e.target.closest?.('.butterfly-copy-icon');
+            if (butterflyCopyIcon) {
+                e.preventDefault();
+                e.stopPropagation();
+                const copy = butterflyCopyIcon.getAttribute('data-copy');
+                if (copy) {
+                    copyToClipboard(copy).then(function () {
+                        butterflyCopyIcon.classList.remove('pi-copy');
+                        butterflyCopyIcon.classList.add('pi-check');
+                        butterflyCopyIcon.title = 'Copied!';
+                        setTimeout(function () {
+                            butterflyCopyIcon.classList.remove('pi-check');
+                            butterflyCopyIcon.classList.add('pi-copy');
+                            butterflyCopyIcon.title = 'Copy trade to clipboard';
+                        }, 1500);
+                    });
+                }
+                return;
+            }
+            const positionsCopyIcon = e.target.closest?.('.positions-copy-icon');
+            if (positionsCopyIcon) {
+                e.preventDefault();
+                e.stopPropagation();
+                const copy = positionsCopyIcon.getAttribute('data-copy');
+                if (copy) {
+                    copyToClipboard(copy).then(function () {
+                        positionsCopyIcon.classList.remove('pi-copy');
+                        positionsCopyIcon.classList.add('pi-check');
+                        positionsCopyIcon.title = 'Copied!';
+                        setTimeout(function () {
+                            positionsCopyIcon.classList.remove('pi-check');
+                            positionsCopyIcon.classList.add('pi-copy');
+                            positionsCopyIcon.title = 'Copy trade to clipboard';
+                        }, 1500);
+                    });
+                }
+                return;
+            }
             const refreshBtn = e.target.closest?.('#positions-refresh-now-btn');
             if (refreshBtn) {
                 e.preventDefault();
@@ -5322,29 +5338,7 @@
                 uploadButton.addEventListener('click', uploadPositionsAnalyticsCsv);
                 uploadButton.dataset.bound = 'true';
             }
-            if (body && !body.dataset.positionsCopyHandlerBound) {
-                body.addEventListener('click', function (e) {
-                    const icon = e.target.closest && e.target.closest('.positions-copy-icon');
-                    if (icon) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const copy = icon.getAttribute('data-copy');
-                        if (copy) {
-                            copyToClipboard(copy).then(function () {
-                                icon.classList.remove('pi-copy');
-                                icon.classList.add('pi-check');
-                                icon.title = 'Copied!';
-                                setTimeout(function () {
-                                    icon.classList.remove('pi-check');
-                                    icon.classList.add('pi-copy');
-                                    icon.title = 'Copy trade to clipboard';
-                                }, 1500);
-                            });
-                        }
-                    }
-                });
-                body.dataset.positionsCopyHandlerBound = 'true';
-            }
+            // Copy icon handled by document-level delegate for HTTP/EB compatibility
             status.textContent = 'Loading positions...';
             if (uploadStatus && !positionsUploadInProgress) uploadStatus.textContent = 'Loading...';
             fetch('/api/positions-analytics')
