@@ -32,6 +32,7 @@ import copy
 import urllib.parse
 from contextlib import redirect_stdout, redirect_stderr
 from threading import Lock, Thread
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import queue
 from config import (
     SCHWAB_TOS_API_KEY,
@@ -1693,6 +1694,318 @@ def save_positions_ticker_filter():
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# --- Butterfly Arbitrage ---
+
+def _butterfly_arbitrage_selection_path():
+    return os.path.join(_get_data_dir(), 'butterfly_arbitrage_selection.json')
+
+
+def _load_stocks_json():
+    """Load stocks.json and return dict of ticker -> data. Returns empty dict if missing."""
+    from pathlib import Path
+    json_path = Path(__file__).parent / 'stocks.json'
+    if not json_path.exists():
+        return {}
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+@app.route('/api/butterfly-arbitrage/tickers', methods=['GET'])
+def get_butterfly_arbitrage_tickers():
+    """Return ticker list from stocks.json for autocomplete."""
+    try:
+        stocks = _load_stocks_json()
+        tickers = sorted([str(t).strip().upper() for t in stocks.keys() if t])
+        return jsonify({'tickers': tickers})
+    except Exception as e:
+        return jsonify({'tickers': [], 'error': str(e)})
+
+
+@app.route('/api/butterfly-arbitrage/selection', methods=['GET'])
+def get_butterfly_arbitrage_selection():
+    """Return saved butterfly arbitrage ticker selection."""
+    try:
+        path = _butterfly_arbitrage_selection_path()
+        if not os.path.exists(path):
+            return jsonify({'tickers': []})
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        tickers = data.get('tickers', [])
+        if not isinstance(tickers, list):
+            tickers = []
+        return jsonify({'tickers': [str(t).strip().upper() for t in tickers if t]})
+    except Exception as e:
+        return jsonify({'tickers': []})
+
+
+@app.route('/api/butterfly-arbitrage/selection', methods=['POST'])
+def save_butterfly_arbitrage_selection():
+    """Save butterfly arbitrage ticker selection."""
+    try:
+        data = request.get_json(silent=True) or {}
+        tickers = data.get('tickers', [])
+        if not isinstance(tickers, list):
+            tickers = []
+        tickers = [str(t).strip().upper() for t in tickers if t]
+        path = _butterfly_arbitrage_selection_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump({'tickers': tickers}, f, indent=2)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def _get_butterfly_expiration(ticker: str, min_dte: int):
+    """Get nearest non-weekly expiration with DTE >= min_dte. Returns (expiration_date, days_to_expiration) or (None, None)."""
+    (exp30_date, exp30_days), (exp40_date, exp40_days) = _get_butterfly_expirations_both(ticker)
+    if min_dte <= 30 and exp30_date:
+        return exp30_date, exp30_days
+    if min_dte <= 40 and exp40_date:
+        return exp40_date, exp40_days
+    return None, None
+
+
+def _get_butterfly_expirations_both(ticker: str):
+    """Fetch expiration chain once, return ((exp30_date, exp30_days), (exp40_date, exp40_days))."""
+    t0 = time.time()
+    exp_response = _schwab_api_get('/expirationchain', {'symbol': ticker})
+    elapsed = time.time() - t0
+    print(f"[Butterfly] {ticker} expirationchain: {elapsed:.2f}s", flush=True)
+    if exp_response.status_code != 200:
+        return (None, None), (None, None)
+    exp_data = exp_response.json()
+    expiration_list = exp_data.get('expirationList') or exp_data.get('ExpirationList') or []
+    candidates = []
+    for item in expiration_list:
+        if not isinstance(item, dict):
+            continue
+        exp_date = item.get('expirationDate') or item.get('expiration') or item.get('ExpirationDate')
+        days = item.get('daysToExpiration') or item.get('DaysToExpiration')
+        exp_type = item.get('expirationType') or item.get('ExpirationType')
+        standard = item.get('standard')
+        if not exp_date or days is None:
+            continue
+        is_weekly = (exp_type == 'W') or (standard is False)
+        if not is_weekly:
+            candidates.append({'expiration_date': exp_date, 'days_to_expiration': int(days)})
+    exp30_cand = sorted([c for c in candidates if c['days_to_expiration'] >= 30], key=lambda x: x['days_to_expiration'])
+    exp40_cand = sorted([c for c in candidates if c['days_to_expiration'] >= 40], key=lambda x: x['days_to_expiration'])
+    exp30 = (exp30_cand[0]['expiration_date'], exp30_cand[0]['days_to_expiration']) if exp30_cand else (None, None)
+    exp40 = (exp40_cand[0]['expiration_date'], exp40_cand[0]['days_to_expiration']) if exp40_cand else (None, None)
+    return exp30, exp40
+
+
+def _get_bid_ask_from_chain(chain_data: dict, expiration_date: str, strike_val: float, put_call: str):
+    """Get (bid, ask) for a strike from chain. put_call is 'CALL' or 'PUT'."""
+    call_map = chain_data.get('callExpDateMap', {}) or {}
+    put_map = chain_data.get('putExpDateMap', {}) or {}
+    side_map = put_map if (put_call or '').upper() == 'PUT' else call_map
+    exp_key = None
+    for key in side_map.keys():
+        if key.startswith(expiration_date):
+            exp_key = key
+            break
+    if not exp_key:
+        return (None, None)
+    strike_dict = side_map.get(exp_key, {})
+    for k in strike_dict.keys():
+        try:
+            if abs(float(k) - float(strike_val)) < 0.01:
+                contracts = strike_dict.get(k, [])
+                if contracts:
+                    c = contracts[0] if isinstance(contracts[0], dict) else contracts
+                    return (c.get('bid'), c.get('ask'))
+                return (None, None)
+        except (TypeError, ValueError):
+            continue
+    return (None, None)
+
+
+def _compute_butterfly_cost(chain_data: dict, expiration_date: str, low: float, mid: float, high: float, put_call: str = 'CALL'):
+    """Compute long butterfly cost using mid price (TOS style). Cost = mid_low + mid_high - 2*mid_mid."""
+    bid_low, ask_low = _get_bid_ask_from_chain(chain_data, expiration_date, low, put_call)
+    bid_mid, ask_mid = _get_bid_ask_from_chain(chain_data, expiration_date, mid, put_call)
+    bid_high, ask_high = _get_bid_ask_from_chain(chain_data, expiration_date, high, put_call)
+
+    def _mid(b, a):
+        b, a = float(b or 0), float(a or 0)
+        return (b + a) / 2 if (b or a) else 0
+
+    mid_low = _mid(bid_low, ask_low)
+    mid_mid = _mid(bid_mid, ask_mid)
+    mid_high = _mid(bid_high, ask_high)
+    cost_per_share = mid_low + mid_high - 2 * mid_mid
+    return round(cost_per_share, 2)
+
+
+def _find_butterflies_for_price(strikes: list, price: float, widths: list):
+    """
+    widths: [1, 5, 10] for 1-2-1, 5-10-5, 10-20-10 (half-width).
+    Returns (left_bf, right_bf) where each is (low, mid, high) or None.
+    Both sides: closest possible (boundary strike nearest price, above or below).
+    Left: minimize |high - price|. Right: minimize |low - price|.
+    Only considers butterflies within reasonable range of price (excludes far OTM).
+    """
+    if not price or price <= 0:
+        return (None, None)
+    max_dist = max(price * 0.35, 50.0)  # boundary must be within ~35% of price or $50
+    strikes_set = set(strikes)
+    left_bf = None
+    right_bf = None
+    for half_w in widths:
+        for mid in strikes:
+            low, high = mid - half_w, mid + half_w
+            if low not in strikes_set or high not in strikes_set:
+                continue
+            # Only consider butterflies near the current price (exclude far OTM like 190 when price is 338)
+            if abs(high - price) > max_dist and abs(low - price) > max_dist:
+                continue
+            # Left: pick butterfly whose high is closest to price
+            if abs(high - price) <= max_dist and (left_bf is None or abs(high - price) < abs(left_bf[2] - price)):
+                left_bf = (low, mid, high)
+            # Right: pick butterfly whose low is closest to price
+            if abs(low - price) <= max_dist and (right_bf is None or abs(low - price) < abs(right_bf[0] - price)):
+                right_bf = (low, mid, high)
+        if left_bf and right_bf:
+            break
+    return (left_bf, right_bf)
+
+
+def _process_butterfly_ticker(ticker: str, widths: list) -> dict:
+    """Process a single ticker for butterfly arbitrage. Returns row dict. Used for parallel execution."""
+    row = {'ticker': ticker, 'current_price': None, 'dte30': None, 'dte40': None, 'error': None}
+    try:
+        (exp30_date, exp30_days), (exp40_date, exp40_days) = _get_butterfly_expirations_both(ticker)
+        if not exp30_date and not exp40_date:
+            row['error'] = 'No non-weekly expirations with DTE >= 30'
+            return row
+
+        def fetch_chain_for_exp(exp_date):
+            t0 = time.time()
+            exp_month = datetime.strptime(exp_date, '%Y-%m-%d').strftime('%b').upper()
+            chain_params = {
+                'symbol': ticker,
+                'contractType': 'ALL',
+                'strikeCount': 100,
+                'includeUnderlyingQuote': 'true',
+                'strategy': 'SINGLE',
+                'range': 'ALL',
+                'expMonth': exp_month,
+                'fromDate': exp_date,
+                'toDate': exp_date
+            }
+            chain_response = _schwab_api_get('/chains', chain_params)
+            if chain_response.status_code != 200:
+                chain_params.pop('fromDate', None)
+                chain_params.pop('toDate', None)
+                chain_response = _schwab_api_get('/chains', chain_params)
+            print(f"[Butterfly] {ticker} chains {exp_date}: {time.time()-t0:.2f}s", flush=True)
+            return exp_date, chain_response
+
+        def compute_for_dte(chain_data, exp_date, current_price):
+            call_map = chain_data.get('callExpDateMap', {}) or {}
+            put_map = chain_data.get('putExpDateMap', {}) or {}
+
+            def find_exp_key(side_map, ed):
+                for k in side_map.keys():
+                    if ed in k:
+                        return k
+                return None
+
+            exp_key = find_exp_key(call_map, exp_date) or find_exp_key(put_map, exp_date)
+            if not exp_key:
+                return None
+            s1 = [float(k) for k in call_map.get(exp_key, {}).keys()]
+            s2 = [float(k) for k in put_map.get(exp_key, {}).keys()]
+            strikes = sorted(set(s1 + s2))
+            if not strikes:
+                return None
+            price = chain_data.get('underlyingPrice') or current_price or 0
+            left_bf, right_bf = _find_butterflies_for_price(strikes, price, widths)
+            out = {}
+            if left_bf:
+                call_cost = _compute_butterfly_cost(chain_data, exp_date, left_bf[0], left_bf[1], left_bf[2], 'CALL')
+                put_cost = _compute_butterfly_cost(chain_data, exp_date, left_bf[0], left_bf[1], left_bf[2], 'PUT')
+                out['left_butterfly'] = {
+                    'strikes': f"{int(left_bf[0])}/{int(left_bf[1])}/{int(left_bf[2])}",
+                    'call_cost': call_cost,
+                    'put_cost': put_cost,
+                }
+            else:
+                out['left_butterfly'] = None
+            if right_bf:
+                call_cost = _compute_butterfly_cost(chain_data, exp_date, right_bf[0], right_bf[1], right_bf[2], 'CALL')
+                put_cost = _compute_butterfly_cost(chain_data, exp_date, right_bf[0], right_bf[1], right_bf[2], 'PUT')
+                out['right_butterfly'] = {
+                    'strikes': f"{int(right_bf[0])}/{int(right_bf[1])}/{int(right_bf[2])}",
+                    'call_cost': call_cost,
+                    'put_cost': put_cost,
+                }
+            else:
+                out['right_butterfly'] = None
+            return out
+
+        exp_dates_to_fetch = list(dict.fromkeys([d for d in [exp30_date, exp40_date] if d]))
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(fetch_chain_for_exp, exp_date) for exp_date in exp_dates_to_fetch]
+            for future in as_completed(futures):
+                exp_date, chain_response = future.result()
+                if chain_response.status_code != 200:
+                    row['error'] = f'Option chain failed: {chain_response.text[:100]}'
+                    continue
+                chain_data = chain_response.json()
+                if row['current_price'] is None:
+                    row['current_price'] = chain_data.get('underlyingPrice') or 0
+                dte_result = compute_for_dte(chain_data, exp_date, row['current_price'])
+                exp_label = datetime.strptime(exp_date, '%Y-%m-%d').strftime('%b %y').upper()
+                days = exp30_days if exp_date == exp30_date else (exp40_days if exp_date == exp40_date else None)
+                if dte_result:
+                    dte_result['expiration_label'] = exp_label
+                    dte_result['days_to_expiration'] = days
+                    dte_result['expiration_date'] = exp_date
+                if exp_date == exp30_date:
+                    row['dte30'] = dte_result
+                if exp_date == exp40_date:
+                    row['dte40'] = dte_result
+    except ValueError as e:
+        row['error'] = str(e)
+    except Exception as e:
+        row['error'] = str(e)
+    return row
+
+
+@app.route('/api/butterfly-arbitrage/data', methods=['GET'])
+def get_butterfly_arbitrage_data():
+    """Return butterfly pricing for selected tickers. Requires Schwab token."""
+    try:
+        if not _get_schwab_refresh_token() or not SCHWAB_TOS_API_KEY:
+            return jsonify({'error': 'Schwab token not configured.', 'rows': []}), 200
+        tickers_param = request.args.get('tickers', '')
+        tickers = [t.strip().upper() for t in tickers_param.split(',') if t.strip()]
+        if not tickers:
+            return jsonify({'rows': []})
+
+        widths = [1, 5, 10]
+        t_request = time.time()
+
+        max_workers = min(len(tickers), 4)  # cap concurrency to avoid rate limits
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(lambda t: _process_butterfly_ticker(t, widths), tickers))
+
+        print(f"[Butterfly] request complete: {len(tickers)} ticker(s) in {time.time() - t_request:.2f}s", flush=True)
+        return jsonify({'rows': results})
+    except ValueError as e:
+        return jsonify({'error': str(e), 'rows': []}), 200
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'rows': []}), 500
 
 
 def _compute_pl_if_close_from_chain(strategies: list, chain_data: dict, num_details: int, log_ticker: str = None):

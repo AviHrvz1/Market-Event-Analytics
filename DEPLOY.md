@@ -109,6 +109,7 @@ Ensure your custom domain (e.g. Cloudflare Tunnel or CNAME) points to the same B
 **Elastic Beanstalk:** The app uses `/var/app/data` (set via `DATA_DIR` in `.ebextensions`). This directory persists across deploys and restarts. It stores:
 - `AccountStatement.csv` – uploaded account statement
 - `positions_ticker_filter.json` – Filter by Ticker selection
+- `butterfly_arbitrage_selection.json` – Butterfly Arbitrage ticker selection
 - `telegram_enabled.txt` – Telegram alerts toggle
 - `schwab_refresh_token.txt` – optional (prefer `SCHWAB_TOS_REFRESH_TOKEN` env var)
 

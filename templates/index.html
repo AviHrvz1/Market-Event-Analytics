@@ -155,6 +155,16 @@
             color: #c62828;
         }
 
+        .butterfly-ticker-select-wrap .ts-control .item,
+        .butterfly-ticker-select-wrap .butterfly-ticker-tag-wrap {
+            display: inline-block;
+            margin: 2px 6px 2px 0;
+            padding: 2px 6px;
+            background: #e8ecf7;
+            border-radius: 4px;
+            border: 1px solid #d0d7e8;
+        }
+
         .stats {
             display: flex;
             gap: 20px;
@@ -995,6 +1005,8 @@
             font-size: 0.8em;
         }
         .system-issue-command .copy-cmd-btn:hover { background: #5568d3; }
+        .butterfly-copy-icon:hover { opacity: 1 !important; }
+        .positions-copy-icon:hover { opacity: 1 !important; }
         .system-issue-link { display: block; margin-top: 6px; word-break: break-all; }
         .system-issue-link a { color: #3498db; }
         .system-issues-buttons { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
@@ -1345,12 +1357,13 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1><img src="/static/favicon-32.png?v=10" alt="" width="80" height="80" style="vertical-align: middle;"> Market Event Analytics</h1>
+            <h1><img src="/static/favicon-32.png?v=10" alt="" width="80" height="80" style="vertical-align: middle;">&nbsp;Market Event Analytics</h1>
             <p>Public Companies - Last 120 Days</p>
         </div>
 
         <div class="tabs">
             <button class="tab-button active" onclick="switchTab('bearish-analytics')">Top Bearish Analytics</button>
+            <button class="tab-button" onclick="switchTab('butterfly-arbitrage')">Butterfly Arbitrage</button>
             <button class="tab-button" onclick="switchTab('positions-analytics')">Positions Analytics</button>
             <button class="tab-button" onclick="switchTab('market-events')">Market Events</button>
         </div>
@@ -1514,6 +1527,39 @@
         </div>
         <!-- End Bearish Analytics Tab -->
 
+        <!-- Butterfly Arbitrage Tab -->
+        <div id="butterfly-arbitrage-tab" class="tab-content">
+            <div style="padding: 20px 30px;">
+                <div style="margin-bottom: 20px;">
+                    <h3 style="color: #2c3e50; margin-bottom: 10px;">Butterfly Arbitrage</h3>
+                    <div id="butterfly-arbitrage-filter" style="margin-bottom: 16px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
+                        <label for="butterfly-ticker-select" style="font-weight: 600; color: #2c3e50;">Select tickers:</label>
+                        <div class="butterfly-ticker-select-wrap" style="min-width: 280px;">
+                            <select id="butterfly-ticker-select" multiple placeholder="Search or select tickers..."></select>
+                        </div>
+                        <button id="butterfly-ticker-clear" style="padding: 6px 12px; border: none; border-radius: 6px; background: #e0e0e0; color: #333; cursor: pointer; font-size: 0.85em;">Clear</button>
+                        <button id="butterfly-refresh-now-btn" style="padding: 6px 12px; border: none; border-radius: 6px; background: #667eea; color: white; cursor: pointer; font-size: 0.85em; display: none;">Refresh now</button>
+                        <span id="butterfly-next-update" style="font-size: 0.85em; color: #888; margin-left: 8px; display: none;">Next update in: <span id="butterfly-countdown">5:00</span></span>
+                    </div>
+                    <div id="butterfly-arbitrage-status" style="color: #666; font-size: 0.95em;">Select tickers to load butterfly pricing.</div>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table id="butterfly-arbitrage-table" style="width: 100%; border-collapse: collapse; background: white; display: none;">
+                        <thead>
+                            <tr style="background: #f8f9fa; border-bottom: 2px solid #e0e0e0;">
+                                <th style="padding: 8px 6px; text-align: center; font-weight: 600; color: #2c3e50;">Ticker</th>
+                                <th style="padding: 8px 6px; text-align: center; font-weight: 600; color: #2c3e50;">Current Price</th>
+                                <th id="butterfly-col3-header" style="padding: 8px 6px; text-align: center; font-weight: 600; color: #2c3e50;">—</th>
+                                <th id="butterfly-col4-header" style="padding: 8px 6px; text-align: center; font-weight: 600; color: #2c3e50;">—</th>
+                            </tr>
+                        </thead>
+                        <tbody id="butterfly-arbitrage-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <!-- End Butterfly Arbitrage Tab -->
+
         <!-- Positions Analytics Tab -->
         <div id="positions-analytics-tab" class="tab-content">
             <div style="padding: 20px 30px;">
@@ -1539,6 +1585,7 @@
                             <select id="positions-ticker-filter" multiple placeholder="Select tickers..."></select>
                         </div>
                         <button id="positions-ticker-clear" style="padding: 6px 12px; border: none; border-radius: 6px; background: #e0e0e0; color: #333; cursor: pointer; font-size: 0.85em;">Clear</button>
+                        <span id="positions-next-update" style="display: none; font-size: 0.85em; color: #888; margin-left: 8px;">Next update in: <span id="positions-countdown">5:00</span></span>
                     </div>
                     <div id="positions-analytics-status" style="color: #666; font-size: 0.95em;">Loading positions...</div>
                 </div>
@@ -3869,14 +3916,417 @@
                 // Update days difference display
                 updateDaysDifference();
                 updateEventsDuringVisibility();
-            } else if (tabName === 'market-events') {
-                document.getElementById('market-events-tab').classList.add('active');
-                document.querySelectorAll('.tab-button')[2].classList.add('active');
+            } else if (tabName === 'butterfly-arbitrage') {
+                document.getElementById('butterfly-arbitrage-tab').classList.add('active');
+                document.querySelectorAll('.tab-button')[1].classList.add('active');
+                loadButterflyArbitrage();
             } else if (tabName === 'positions-analytics') {
                 document.getElementById('positions-analytics-tab').classList.add('active');
-                document.querySelectorAll('.tab-button')[1].classList.add('active');
+                document.querySelectorAll('.tab-button')[2].classList.add('active');
                 loadPositionsWithMonitoring();
+            } else if (tabName === 'market-events') {
+                document.getElementById('market-events-tab').classList.add('active');
+                document.querySelectorAll('.tab-button')[3].classList.add('active');
             }
+        }
+
+        // --- Butterfly Arbitrage ---
+        let butterflyArbitrageTomSelect = null;
+        let butterflyArbitrageLoaded = false;
+
+        function loadButterflyArbitrage() {
+            const filterEl = document.getElementById('butterfly-arbitrage-filter');
+            const selectEl = document.getElementById('butterfly-ticker-select');
+            if (!filterEl || !selectEl) return;
+
+            const refreshBtn = document.getElementById('butterfly-refresh-now-btn');
+            if (refreshBtn && !refreshBtn.dataset.bound) {
+                refreshBtn.onclick = function () { refreshButterflyData(); };
+                refreshBtn.dataset.bound = 'true';
+            }
+
+            if (!butterflyArbitrageLoaded) {
+                butterflyArbitrageLoaded = true;
+                fetch('/api/butterfly-arbitrage/tickers')
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        const tickers = (data.tickers || []).map(function (t) { return String(t).trim(); }).filter(Boolean);
+                        selectEl.innerHTML = '';
+                        tickers.forEach(function (t) {
+                            const opt = document.createElement('option');
+                            opt.value = t;
+                            opt.textContent = t;
+                            selectEl.appendChild(opt);
+                        });
+                        if (typeof TomSelect !== 'undefined') {
+                            if (butterflyArbitrageTomSelect) {
+                                butterflyArbitrageTomSelect.destroy();
+                                butterflyArbitrageTomSelect = null;
+                            }
+                            butterflyArbitrageTomSelect = new TomSelect('#butterfly-ticker-select', {
+                                placeholder: 'Search or select tickers...',
+                                maxItems: null,
+                                render: {
+                                    item: function (data, escape) {
+                                        var val = (data.value != null ? data.value : '');
+                                        var text = (data.text != null ? data.text : val);
+                                        return '<span class="butterfly-ticker-tag-wrap" data-ticker="' + escape(String(val)) + '">' +
+                                            '<span class="butterfly-ticker-tag-text">' + escape(String(text)) + '</span>' +
+                                            '<span class="butterfly-ticker-remove-btn" title="Remove from selection">×</span>' +
+                                            '</span>';
+                                    }
+                                }
+                            });
+                            butterflyArbitrageTomSelect.on('change', function () {
+                                saveButterflyArbitrageSelection();
+                                fetchButterflyArbitrageData();
+                            });
+                            const clearBtn = document.getElementById('butterfly-ticker-clear');
+                            if (clearBtn) {
+                                clearBtn.onclick = function () {
+                                    if (butterflyArbitrageTomSelect) {
+                                        butterflyArbitrageTomSelect.clear();
+                                        saveButterflyArbitrageSelection();
+                                        fetchButterflyArbitrageData();
+                                    }
+                                };
+                            }
+                            if (filterEl && !filterEl.dataset.butterflyClickBound) {
+                                filterEl.addEventListener('click', function (e) {
+                                    const removeBtn = e.target.closest && e.target.closest('.butterfly-ticker-remove-btn');
+                                    if (removeBtn) {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        const wrap = removeBtn.closest && removeBtn.closest('.butterfly-ticker-tag-wrap');
+                                        const val = wrap ? wrap.getAttribute('data-ticker') : null;
+                                        if (val && confirm('Remove ' + val + ' from selection?')) {
+                                            if (butterflyArbitrageTomSelect) {
+                                                butterflyArbitrageTomSelect.removeItem(val);
+                                                saveButterflyArbitrageSelection();
+                                                fetchButterflyArbitrageData();
+                                            }
+                                        }
+                                        return false;
+                                    }
+                                }, true);
+                                filterEl.dataset.butterflyClickBound = 'true';
+                            }
+                            fetch('/api/butterfly-arbitrage/selection')
+                                .then(function (r) { return r.json(); })
+                                .then(function (data) {
+                                    const saved = (data.tickers || []).map(function (t) { return String(t).trim(); }).filter(Boolean);
+                                    const valid = saved.filter(function (t) { return tickers.indexOf(t) >= 0; });
+                                    if (valid.length && butterflyArbitrageTomSelect) {
+                                        butterflyArbitrageTomSelect.setValue(valid);
+                                        // change handler runs on setValue and fetches
+                                    }
+                                })
+                                .catch(function () {});
+                        }
+                    })
+                    .catch(function (err) {
+                        document.getElementById('butterfly-arbitrage-status').textContent = 'Failed to load tickers: ' + (err.message || err);
+                    });
+            } else {
+                fetchButterflyArbitrageData();
+            }
+        }
+
+        function saveButterflyArbitrageSelection() {
+            let tickers = [];
+            if (butterflyArbitrageTomSelect) {
+                tickers = (butterflyArbitrageTomSelect.getValue() || []).map(function (v) { return String(v).trim().toUpperCase(); }).filter(Boolean);
+            } else {
+                const selectEl = document.getElementById('butterfly-ticker-select');
+                if (selectEl && selectEl.multiple) {
+                    tickers = Array.from(selectEl.selectedOptions).map(function (o) { return (o.value || '').trim().toUpperCase(); }).filter(Boolean);
+                }
+            }
+            fetch('/api/butterfly-arbitrage/selection', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tickers: tickers })
+            }).catch(function () {});
+        }
+
+        function formatButterflyCell(dteData, ticker) {
+            if (!dteData) return '<span style="color: #888;">N/A</span>';
+            const left = dteData.left_butterfly;
+            const right = dteData.right_butterfly;
+            if (!left && !right) return '<span style="color: #888;">N/A</span>';
+            const expDate = dteData.expiration_date || '';
+            const tick = (ticker || '').toUpperCase();
+            function formatExpForTrade(d) {
+                if (!d) return '';
+                const dt = new Date(d + 'T12:00:00');
+                const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+                return dt.getDate() + ' ' + months[dt.getMonth()] + ' ' + String(dt.getFullYear()).slice(-2);
+            }
+            function buildTradeCopy(bf, putCall, price) {
+                const expStr = formatExpForTrade(expDate);
+                const strikes = (bf && bf.strikes) ? bf.strikes.replace(/\s/g, '') : '';
+                const p = (price != null && !isNaN(price)) ? Number(price).toFixed(2) : '0.00';
+                return 'BUY +10 BUTTERFLY ' + tick + ' 100 ' + expStr + ' ' + strikes + ' ' + putCall + ' @' + p + ' LMT';
+            }
+            function formatStrikes(s) { return (s || '').replace(/\//g, ' / '); }
+            function formatCost(cost) {
+                const n = Number(cost);
+                const abs = Math.abs(n).toFixed(2);
+                if (n > 0) return abs + ' Debit';
+                if (n < 0) return '-' + abs + ' Credit';
+                return abs;
+            }
+            function costStyle(cost) {
+                const n = Number(cost);
+                if (n > 0 && n < 0.12) return 'color: #ca8a04; background: #fef9c3;';
+                return '';
+            }
+            function rowHtml(struct, bf) {
+                if (!bf) return '<tr><td style="padding:4px 6px;">' + struct + '</td><td colspan="3" style="padding:4px 6px; color:#888;">N/A</td></tr>';
+                const callCost = bf.call_cost != null ? bf.call_cost : (bf.cost != null ? bf.cost : 0);
+                const putCost = bf.put_cost != null ? bf.put_cost : 0;
+                const callStr = formatCost(callCost);
+                const putStr = formatCost(putCost);
+                const callStyle = costStyle(callCost);
+                const putStyle = costStyle(putCost);
+                const callCopy = buildTradeCopy(bf, 'CALL', callCost);
+                const copyIcon = '<span class="butterfly-copy-icon pi pi-copy" data-copy="' + escapeHtml(callCopy) + '" title="Copy trade to clipboard" style="cursor: pointer; margin-right: 6px; opacity: 0.7; font-size: 0.85em;"></span>';
+                return '<tr><td style="padding:4px 6px;">' + copyIcon + struct + '</td><td style="padding:4px 6px;">' + formatStrikes(bf.strikes) + '</td>' +
+                    '<td style="padding:4px 6px; text-align:right; ' + callStyle + '">' + callStr + '</td>' +
+                    '<td style="padding:4px 6px; text-align:right; ' + putStyle + '">' + putStr + '</td></tr>';
+            }
+            return '<table style="width:100%; border-collapse:collapse; font-size:0.9em;">' +
+                '<thead><tr style="border-bottom:1px solid #e0e0e0;">' +
+                '<th style="text-align:left; padding:4px 6px;">Structure</th>' +
+                '<th style="text-align:left; padding:4px 6px;">Strikes</th>' +
+                '<th style="text-align:right; padding:4px 6px;">Call Price</th>' +
+                '<th style="text-align:right; padding:4px 6px;">Put Price</th>' +
+                '</tr></thead><tbody>' +
+                rowHtml('Left', left) + rowHtml('Right', right) +
+                '</tbody></table>';
+        }
+
+        function getButterflyTableTickers() {
+            const bodyEl = document.getElementById('butterfly-arbitrage-body');
+            if (!bodyEl) return [];
+            return Array.from(bodyEl.querySelectorAll('tr[data-ticker]')).map(function (tr) { return tr.dataset.ticker; });
+        }
+
+        function updateButterflyColumnHeaders() {
+            const bodyEl = document.getElementById('butterfly-arbitrage-body');
+            const h3 = document.getElementById('butterfly-col3-header');
+            const h4 = document.getElementById('butterfly-col4-header');
+            if (!bodyEl || !h3 || !h4) return;
+            const firstTr = bodyEl.querySelector('tr[data-ticker]');
+            if (firstTr && firstTr.__rowData) {
+                const d30 = firstTr.__rowData.dte30;
+                const d40 = firstTr.__rowData.dte40;
+                const h3Label = (d30 && d30.expiration_label) ? d30.expiration_label : '';
+                const h4Label = (d40 && d40.expiration_label) ? d40.expiration_label : '';
+                const h3Dte = (d30 && d30.days_to_expiration != null) ? ' (' + d30.days_to_expiration + ' DTE)' : '';
+                const h4Dte = (d40 && d40.days_to_expiration != null) ? ' (' + d40.days_to_expiration + ' DTE)' : '';
+                h3.textContent = h3Label ? h3Label + h3Dte : '—';
+                h4.textContent = h4Label ? h4Label + h4Dte : '—';
+            } else {
+                h3.textContent = '—';
+                h4.textContent = '—';
+            }
+        }
+
+        const BUTTERFLY_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+        let butterflyRefreshTimer = null;
+        let butterflyCountdownTimer = null;
+        let butterflyNextRefreshAt = 0;
+
+        function updateButterflyRowInPlace(tr, row) {
+            tr.__rowData = row;
+            const priceStr = row.current_price != null ? '$' + Number(row.current_price).toFixed(2) : 'N/A';
+            const dte30Html = formatButterflyCell(row.dte30, row.ticker);
+            const dte40Html = formatButterflyCell(row.dte40, row.ticker);
+            const errHtml = row.error ? '<div style="color: #dc2626; font-size: 0.85em;">' + row.error + '</div>' : '';
+            tr.cells[0].innerHTML = (row.ticker || '') + errHtml;
+            tr.cells[1].textContent = priceStr;
+            tr.cells[2].innerHTML = dte30Html;
+            tr.cells[3].innerHTML = dte40Html;
+        }
+
+        function appendButterflyRows(bodyEl, rows) {
+            rows.forEach(function (row) {
+                const tr = document.createElement('tr');
+                tr.__rowData = row;
+                tr.setAttribute('data-ticker', (row.ticker || '').toUpperCase());
+                tr.style.borderBottom = '1px solid #e0e0e0';
+                const priceStr = row.current_price != null ? '$' + Number(row.current_price).toFixed(2) : 'N/A';
+                const dte30Html = formatButterflyCell(row.dte30, row.ticker);
+                const dte40Html = formatButterflyCell(row.dte40, row.ticker);
+                const errHtml = row.error ? '<div style="color: #dc2626; font-size: 0.85em;">' + row.error + '</div>' : '';
+                tr.innerHTML = '<td style="padding: 8px 6px; text-align: center; font-weight: 500;">' + (row.ticker || '') + errHtml + '</td>' +
+                    '<td style="padding: 8px 6px; text-align: center;">' + priceStr + '</td>' +
+                    '<td style="padding: 8px 6px; text-align: center;">' + dte30Html + '</td>' +
+                    '<td style="padding: 8px 6px; text-align: center;">' + dte40Html + '</td>';
+                bodyEl.appendChild(tr);
+            });
+            updateButterflyColumnHeaders();
+        }
+
+        function refreshButterflyData() {
+            const tickers = getButterflyTableTickers();
+            if (tickers.length === 0) return;
+            const statusEl = document.getElementById('butterfly-arbitrage-status');
+            const refreshBtn = document.getElementById('butterfly-refresh-now-btn');
+            const nextUpdateEl = document.getElementById('butterfly-next-update');
+            if (refreshBtn) refreshBtn.disabled = true;
+            if (statusEl) statusEl.textContent = 'Updating...';
+            fetch('/api/butterfly-arbitrage/data?tickers=' + encodeURIComponent(tickers.join(',')))
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (data.error && (data.rows || []).length === 0) {
+                        if (statusEl) statusEl.textContent = data.error;
+                        return;
+                    }
+                    const statusEl2 = document.getElementById('butterfly-arbitrage-status');
+                    if (statusEl2) statusEl2.textContent = '';
+                    const bodyEl = document.getElementById('butterfly-arbitrage-body');
+                    if (!bodyEl) return;
+                    const rows = data.rows || [];
+                    const rowMap = {};
+                    rows.forEach(function (r) { rowMap[(r.ticker || '').toUpperCase()] = r; });
+                    bodyEl.querySelectorAll('tr[data-ticker]').forEach(function (tr) {
+                        const ticker = tr.dataset.ticker;
+                        const row = rowMap[ticker];
+                        if (row) updateButterflyRowInPlace(tr, row);
+                    });
+                    updateButterflyColumnHeaders();
+                    butterflyNextRefreshAt = Date.now() + BUTTERFLY_REFRESH_INTERVAL_MS;
+                    if (nextUpdateEl) nextUpdateEl.style.display = 'inline';
+                    updateButterflyCountdown();
+                    startButterflyRefreshTimer();
+                })
+                .catch(function (err) {
+                    const s = document.getElementById('butterfly-arbitrage-status');
+                    if (s) s.textContent = 'Update failed: ' + (err.message || err);
+                })
+                .finally(function () {
+                    const btn = document.getElementById('butterfly-refresh-now-btn');
+                    if (btn) btn.disabled = false;
+                });
+        }
+
+        function updateButterflyCountdown() {
+            const span = document.getElementById('butterfly-countdown');
+            if (!span) return;
+            const remaining = Math.max(0, Math.ceil((butterflyNextRefreshAt - Date.now()) / 1000));
+            const m = Math.floor(remaining / 60);
+            const s = remaining % 60;
+            span.textContent = m + ':' + (s < 10 ? '0' : '') + s;
+        }
+
+        function startButterflyRefreshTimer() {
+            if (butterflyRefreshTimer) clearInterval(butterflyRefreshTimer);
+            if (butterflyCountdownTimer) clearInterval(butterflyCountdownTimer);
+            butterflyNextRefreshAt = Date.now() + BUTTERFLY_REFRESH_INTERVAL_MS;
+            const refreshBtn = document.getElementById('butterfly-refresh-now-btn');
+            const nextUpdateEl = document.getElementById('butterfly-next-update');
+            if (refreshBtn) refreshBtn.style.display = 'inline-block';
+            if (nextUpdateEl) nextUpdateEl.style.display = 'inline';
+            updateButterflyCountdown();
+            butterflyRefreshTimer = setInterval(refreshButterflyData, BUTTERFLY_REFRESH_INTERVAL_MS);
+            butterflyCountdownTimer = setInterval(updateButterflyCountdown, 1000);
+        }
+
+        function stopButterflyRefreshTimer() {
+            if (butterflyRefreshTimer) { clearInterval(butterflyRefreshTimer); butterflyRefreshTimer = null; }
+            if (butterflyCountdownTimer) { clearInterval(butterflyCountdownTimer); butterflyCountdownTimer = null; }
+            const refreshBtn = document.getElementById('butterfly-refresh-now-btn');
+            const nextUpdateEl = document.getElementById('butterfly-next-update');
+            if (refreshBtn) refreshBtn.style.display = 'none';
+            if (nextUpdateEl) nextUpdateEl.style.display = 'none';
+        }
+
+        function fetchButterflyArbitrageData() {
+            let tickers = [];
+            if (butterflyArbitrageTomSelect) {
+                tickers = (butterflyArbitrageTomSelect.getValue() || []).map(function (v) { return String(v).trim().toUpperCase(); }).filter(Boolean);
+            } else {
+                const selectEl = document.getElementById('butterfly-ticker-select');
+                if (selectEl && selectEl.multiple) {
+                    tickers = Array.from(selectEl.selectedOptions).map(function (o) { return (o.value || '').trim().toUpperCase(); }).filter(Boolean);
+                }
+            }
+            const statusEl = document.getElementById('butterfly-arbitrage-status');
+            const tableEl = document.getElementById('butterfly-arbitrage-table');
+            const bodyEl = document.getElementById('butterfly-arbitrage-body');
+            if (!statusEl || !tableEl || !bodyEl) return;
+
+            if (!bodyEl.dataset.copyHandlerBound) {
+                bodyEl.addEventListener('click', function (e) {
+                    const icon = e.target.closest && e.target.closest('.butterfly-copy-icon');
+                    if (icon) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const copy = icon.getAttribute('data-copy');
+                        if (copy && navigator.clipboard && navigator.clipboard.writeText) {
+                            navigator.clipboard.writeText(copy).then(function () {
+                                icon.classList.remove('pi-copy');
+                                icon.classList.add('pi-check');
+                                icon.title = 'Copied!';
+                                setTimeout(function () {
+                                    icon.classList.remove('pi-check');
+                                    icon.classList.add('pi-copy');
+                                    icon.title = 'Copy trade to clipboard';
+                                }, 1500);
+                            });
+                        }
+                    }
+                });
+                bodyEl.dataset.copyHandlerBound = 'true';
+            }
+
+            if (tickers.length === 0) {
+                statusEl.textContent = 'Select tickers to load butterfly pricing.';
+                tableEl.style.display = 'none';
+                bodyEl.innerHTML = '';
+                stopButterflyRefreshTimer();
+                const h3 = document.getElementById('butterfly-col3-header');
+                const h4 = document.getElementById('butterfly-col4-header');
+                if (h3) h3.textContent = '—';
+                if (h4) h4.textContent = '—';
+                return;
+            }
+
+            const inTable = getButterflyTableTickers();
+            const selectionSet = new Set(tickers);
+            const inTableSet = new Set(inTable);
+            const toAdd = tickers.filter(function (t) { return !inTableSet.has(t); });
+            const toRemove = inTable.filter(function (t) { return !selectionSet.has(t); });
+
+            toRemove.forEach(function (t) {
+                bodyEl.querySelectorAll('tr[data-ticker="' + t + '"]').forEach(function (tr) { tr.remove(); });
+            });
+            if (toRemove.length > 0) updateButterflyColumnHeaders();
+
+            if (toAdd.length === 0) {
+                statusEl.textContent = '';
+                return;
+            }
+
+            statusEl.textContent = 'Loading butterfly data...';
+            tableEl.style.display = 'table';
+
+            fetch('/api/butterfly-arbitrage/data?tickers=' + encodeURIComponent(toAdd.join(',')))
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (data.error && (data.rows || []).length === 0) {
+                        statusEl.textContent = data.error;
+                        return;
+                    }
+                    statusEl.textContent = '';
+                    appendButterflyRows(bodyEl, data.rows || []);
+                    startButterflyRefreshTimer();
+                })
+                .catch(function (err) {
+                    statusEl.textContent = 'Failed to load: ' + (err.message || err);
+                });
         }
 
         let positionsAnalyticsLoaded = false;
@@ -3892,8 +4342,47 @@
         let _alertDebounceTimer = null;
         let _lastAlertBatchTime = 0;
         const HIGHLIGHT_CLEAR_INTERVAL_MS = 5 * 60 * 1000;
+        const POSITIONS_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
         let masterBellsEnabled = false;
         let telegramEnabled = false;
+        let positionsRefreshTimer = null;
+        let positionsCountdownTimer = null;
+        let positionsNextRefreshAt = 0;
+
+        function refreshPositionsData() {
+            if (monitoredTickers.size === 0) return;
+            positionsNextRefreshAt = Date.now() + POSITIONS_REFRESH_INTERVAL_MS;
+            loadPositionsAnalytics(true);
+        }
+
+        function updatePositionsCountdown() {
+            const span = document.getElementById('positions-countdown');
+            if (!span) return;
+            const remaining = Math.max(0, Math.ceil((positionsNextRefreshAt - Date.now()) / 1000));
+            const m = Math.floor(remaining / 60);
+            const s = remaining % 60;
+            span.textContent = m + ':' + (s < 10 ? '0' : '') + s;
+        }
+
+        function startPositionsRefreshTimer() {
+            if (monitoredTickers.size === 0) return;
+            if (positionsRefreshTimer) clearInterval(positionsRefreshTimer);
+            if (positionsCountdownTimer) clearInterval(positionsCountdownTimer);
+            refreshPositionsData();
+            positionsNextRefreshAt = Date.now() + POSITIONS_REFRESH_INTERVAL_MS;
+            const nextUpdateEl = document.getElementById('positions-next-update');
+            if (nextUpdateEl) nextUpdateEl.style.display = 'inline';
+            updatePositionsCountdown();
+            positionsRefreshTimer = setInterval(refreshPositionsData, POSITIONS_REFRESH_INTERVAL_MS);
+            positionsCountdownTimer = setInterval(updatePositionsCountdown, 1000);
+        }
+
+        function stopPositionsRefreshTimer() {
+            if (positionsRefreshTimer) { clearInterval(positionsRefreshTimer); positionsRefreshTimer = null; }
+            if (positionsCountdownTimer) { clearInterval(positionsCountdownTimer); positionsCountdownTimer = null; }
+            const nextUpdateEl = document.getElementById('positions-next-update');
+            if (nextUpdateEl) nextUpdateEl.style.display = 'none';
+        }
 
         // Load monitored tickers on page load
         function loadMonitoringStatus() {
@@ -3904,6 +4393,9 @@
                     updateBellIcons();
                     if (monitoredTickers.size > 0) {
                         startAlertStream();
+                        startPositionsRefreshTimer();
+                    } else {
+                        stopPositionsRefreshTimer();
                     }
                 })
                 .catch(err => console.error('[Monitor] Failed to load status:', err));
@@ -3940,9 +4432,12 @@
                         bellElement.textContent = '🔕';
                         bellElement.classList.remove('active');
                         console.log(`[Monitor] Stopped monitoring ${key}`);
-                        if (monitoredTickers.size === 0 && alertEventSource) {
-                            alertEventSource.close();
-                            alertEventSource = null;
+                        if (monitoredTickers.size === 0) {
+                            if (alertEventSource) {
+                                alertEventSource.close();
+                                alertEventSource = null;
+                            }
+                            stopPositionsRefreshTimer();
                         }
                     } else {
                         monitoredTickers.add(key);
@@ -3950,6 +4445,7 @@
                         bellElement.classList.add('active');
                         console.log(`[Monitor] Started monitoring ${key}`);
                         startAlertStream();
+                        startPositionsRefreshTimer();
                     }
                 }
             })
@@ -4127,10 +4623,15 @@
                     iconEl.textContent = masterBellsEnabled ? '🔔' : '🔕';
                     iconEl.dataset.masterEnabled = masterBellsEnabled ? 'true' : 'false';
                 }
-                if (enabling && monitoredTickers.size > 0) startAlertStream();
-                else if (!enabling && monitoredTickers.size === 0 && alertEventSource) {
-                    alertEventSource.close();
-                    alertEventSource = null;
+                if (enabling && monitoredTickers.size > 0) {
+                    startAlertStream();
+                    startPositionsRefreshTimer();
+                } else if (!enabling && monitoredTickers.size === 0) {
+                    if (alertEventSource) {
+                        alertEventSource.close();
+                        alertEventSource = null;
+                    }
+                    stopPositionsRefreshTimer();
                 }
             }).catch(err => console.error('[Monitor] Master bell toggle failed:', err));
         }
@@ -4213,10 +4714,7 @@
         function renderPositionDetailsContent(position, closeValueData, detailsId) {
             const detailRows = Array.isArray(position.details) ? position.details : [];
             const closedPairs = Array.isArray(position.closed_pairs) ? position.closed_pairs : [];
-            const plText = formatPositionsAmount(position.pl_total);
             const perDetail = (closeValueData && closeValueData.per_detail) ? closeValueData.per_detail : [];
-            const strategies = (closeValueData && closeValueData.strategies) ? closeValueData.strategies : [];
-            const totalPlIfClose = (closeValueData && closeValueData.total_pl_if_close != null) ? closeValueData.total_pl_if_close : null;
             const hasClose = perDetail.length > 0 && perDetail.some(p => p != null);
             const ticker = (position.ticker || '').trim().toUpperCase();
             const isOpen = position.status === 'Open';
@@ -4314,41 +4812,49 @@
                 closedPairsHtml += '</div></div>';
             }
 
-            // Summary metrics per ticker
-            const closedClosedProfit = closedPairs.reduce((sum, pair) => {
-                const v = Number(pair && pair.net_profit);
-                return sum + (Number.isNaN(v) ? 0 : v);
-            }, 0);
-            const openAmounts = detailRows.map(d => {
-                const v = Number(d && d.amount);
-                return Number.isNaN(v) ? 0 : v;
-            });
-            const openNetInvested = openAmounts.reduce((sum, v) => sum + v, 0); // net cash in open positions
-            const openDebitRaw = openAmounts.reduce((sum, v) => sum + (v < 0 ? v : 0), 0); // total debit (negative)
-            const calendarDays = Number(position.calendar_days) || 0;
-            const hasClosedProfit = closedClosedProfit !== 0;
-            const hasOpenPositions = detailRows.length > 0;
-            let avgPerDay = null;
-            if (calendarDays > 0 && hasClosedProfit) {
-                avgPerDay = closedClosedProfit / calendarDays;
+            function buildPositionTradeCopy(pos, strategy, closeCreditDebit, detail) {
+                const legs = strategy && strategy.legs ? strategy.legs : [];
+                if (legs.length === 0) return '';
+                const tick = (pos.ticker || '').trim().toUpperCase();
+                const expDate = legs[0].expiration_date;
+                const formatExp = (d) => {
+                    if (!d) return '';
+                    const dt = new Date(d + 'T12:00:00');
+                    const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+                    return dt.getDate() + ' ' + months[dt.getMonth()] + ' ' + String(dt.getFullYear()).slice(-2);
+                };
+                const strikes = legs.map(l => Number(l.strike) || 0).filter(s => !isNaN(s));
+                const strikesStr = strikes.length > 0 ? strikes.sort((a, b) => a - b).map(s => s === Math.floor(s) ? String(Math.floor(s)) : String(s)).join('/') : '';
+                const putCall = (legs[0].put_call || 'CALL').toUpperCase();
+                const qty = Math.abs(Number(legs[0].qty) || 1);
+                let price = 0;
+                if (detail && detail.amount != null) {
+                    const amt = Number(detail.amount) || 0;
+                    price = Math.abs(amt) / (qty * 100);
+                } else if (closeCreditDebit != null && !isNaN(closeCreditDebit) && qty > 0) {
+                    price = Math.abs(Number(closeCreditDebit)) / (qty * 100);
+                }
+                const p = (price != null && !isNaN(price)) ? Number(price).toFixed(2) : '0.00';
+                const stratType = (strategy.type || 'BUTTERFLY').toUpperCase();
+                return 'BUY +' + qty + ' ' + stratType + ' ' + tick + ' 100 ' + formatExp(expDate) + ' ' + strikesStr + ' ' + putCall + ' @' + p + ' LMT';
             }
-            const formatDebitCredit = (val) => {
-                const n = Number(val) || 0;
-                const label = n < 0 ? 'debit' : 'credit';
-                return formatPositionsAmount(n) + ' (' + label + ')';
-            };
 
             let detailsTableHtml = '';
             if (detailRows.length > 0) {
                 const thStyle = 'padding: 6px 10px; font-weight: 600; color: #2c3e50; font-size: 0.85em; border-bottom: 2px solid #ddd; background: #e8ecf7 !important;';
                 const tdStyle = 'padding: 6px 10px; font-size: 0.9em; border-bottom: 1px dashed #eee;';
                 const headerCells = hasClose
-                    ? `<thead><tr><th style="${thStyle} text-align: left;">Date/Time</th><th style="${thStyle} text-align: left;">Description</th><th style="${thStyle} text-align: right;">Cost</th><th style="${thStyle} text-align: right;">Close (Cr/Db)</th><th style="${thStyle} text-align: right;">Net profit (if close)</th><th style="${thStyle} text-align: left;">Leg</th><th style="${thStyle} text-align: left;">Ref</th></tr></thead>`
-                    : `<thead><tr><th style="${thStyle} text-align: left;">Date/Time</th><th style="${thStyle} text-align: left;">Description</th><th style="${thStyle} text-align: right;">Cost</th><th style="${thStyle} text-align: left;">Leg</th><th style="${thStyle} text-align: left;">Ref</th></tr></thead>`;
+                    ? `<thead><tr><th style="${thStyle} text-align: center; width: 32px;"></th><th style="${thStyle} text-align: left;">Date/Time</th><th style="${thStyle} text-align: left;">Description</th><th style="${thStyle} text-align: right;">Cost</th><th style="${thStyle} text-align: right;">Close (Cr/Db)</th><th style="${thStyle} text-align: right;">Net profit (if close)</th><th style="${thStyle} text-align: left;">Leg</th><th style="${thStyle} text-align: left;">Ref</th></tr></thead>`
+                    : `<thead><tr><th style="${thStyle} text-align: center; width: 32px;"></th><th style="${thStyle} text-align: left;">Date/Time</th><th style="${thStyle} text-align: left;">Description</th><th style="${thStyle} text-align: right;">Cost</th><th style="${thStyle} text-align: left;">Leg</th><th style="${thStyle} text-align: left;">Ref</th></tr></thead>`;
+                const strategies = position.strategies || [];
                 const bodyRows = detailRows.map((detail, i) => {
+                    const strategy = strategies.find(s => s.detail_index === i);
+                    const pd = perDetail[i];
+                    const closeCreditDebit = pd && pd.close_credit_debit != null ? pd.close_credit_debit : null;
+                    const copyStr = strategy && strategy.legs && strategy.legs.length > 0 ? buildPositionTradeCopy(position, strategy, closeCreditDebit, detail) : '';
+                    const copyIcon = copyStr ? '<span class="positions-copy-icon pi pi-copy" data-copy="' + escapeHtml(copyStr) + '" title="Copy trade to clipboard" style="cursor: pointer; opacity: 0.7; font-size: 0.85em;"></span>' : '';
                     const amount = Number(detail.amount) || 0;
                     const amountText = formatPositionsAmount(detail.amount) + ' (' + (amount < 0 ? 'debit' : 'credit') + ')';
-                    const pd = perDetail[i];
                     let closeCell = '';
                     let plCell = '';
                     if (hasClose && pd) {
@@ -4359,55 +4865,17 @@
                         plCell = `<span style="color: ${plColor};">${formatPositionsAmount(plVal)}</span>`;
                     }
                     const legLabel = detail.leg_type || 'To Open';
+                    const iconCell = '<td style="' + tdStyle + ' text-align: center;">' + copyIcon + '</td>';
                     if (hasClose) {
-                        return `<tr data-detail-index="${i}"><td style="${tdStyle} color: #555;">${detail.datetime || ''}</td><td style="${tdStyle} color: #2c3e50;">${detail.description || ''}</td><td style="${tdStyle} text-align: right; color: #2c3e50;">${amountText}</td><td style="${tdStyle} text-align: right; color: #2c3e50;">${closeCell}</td><td style="${tdStyle} text-align: right; font-weight: 600;">${plCell}</td><td style="${tdStyle} text-align: left;">${legLabel}</td><td style="${tdStyle} color: #888;">${detail.ref || ''}</td></tr>`;
+                        return `<tr data-detail-index="${i}">${iconCell}<td style="${tdStyle} color: #555;">${detail.datetime || ''}</td><td style="${tdStyle} color: #2c3e50;">${detail.description || ''}</td><td style="${tdStyle} text-align: right; color: #2c3e50;">${amountText}</td><td style="${tdStyle} text-align: right; color: #2c3e50;">${closeCell}</td><td style="${tdStyle} text-align: right; font-weight: 600;">${plCell}</td><td style="${tdStyle} text-align: left;">${legLabel}</td><td style="${tdStyle} color: #888;">${detail.ref || ''}</td></tr>`;
                     }
-                    return `<tr data-detail-index="${i}"><td style="${tdStyle} color: #555;">${detail.datetime || ''}</td><td style="${tdStyle} color: #2c3e50;">${detail.description || ''}</td><td style="${tdStyle} text-align: right; color: #2c3e50;">${amountText}</td><td style="${tdStyle} text-align: left;">${legLabel}</td><td style="${tdStyle} color: #888;">${detail.ref || ''}</td></tr>`;
+                    return `<tr data-detail-index="${i}">${iconCell}<td style="${tdStyle} color: #555;">${detail.datetime || ''}</td><td style="${tdStyle} color: #2c3e50;">${detail.description || ''}</td><td style="${tdStyle} text-align: right; color: #2c3e50;">${amountText}</td><td style="${tdStyle} text-align: left;">${legLabel}</td><td style="${tdStyle} color: #888;">${detail.ref || ''}</td></tr>`;
                 }).join('');
                 if (hasClose) {
-                    detailsTableHtml = '<table class="positions-trade-details-table" style="width: 100%; border-collapse: collapse;"><colgroup><col style="width: 120px;"><col><col style="width: 90px;"><col style="width: 100px;"><col style="width: 95px;"><col style="width: 80px;"><col style="width: 85px;"></colgroup>' + headerCells + '<tbody>' + bodyRows + '</tbody></table>';
+                    detailsTableHtml = '<table class="positions-trade-details-table" style="width: 100%; border-collapse: collapse;"><colgroup><col style="width: 32px;"><col style="width: 120px;"><col><col style="width: 90px;"><col style="width: 100px;"><col style="width: 95px;"><col style="width: 80px;"><col style="width: 85px;"></colgroup>' + headerCells + '<tbody>' + bodyRows + '</tbody></table>';
                 } else {
-                    detailsTableHtml = '<table class="positions-trade-details-table" style="width: 100%; border-collapse: collapse;"><colgroup><col style="width: 120px;"><col><col style="width: 90px;"><col style="width: 80px;"><col style="width: 85px;"></colgroup>' + headerCells + '<tbody>' + bodyRows + '</tbody></table>';
+                    detailsTableHtml = '<table class="positions-trade-details-table" style="width: 100%; border-collapse: collapse;"><colgroup><col style="width: 32px;"><col style="width: 120px;"><col><col style="width: 90px;"><col style="width: 80px;"><col style="width: 85px;"></colgroup>' + headerCells + '<tbody>' + bodyRows + '</tbody></table>';
                 }
-            }
-
-            var summaryBlockHtml = '';
-            if (totalPlIfClose != null || hasClose || hasClosedProfit || hasOpenPositions) {
-                summaryBlockHtml =
-                    '<div style="background: #f0f4ff; border: 1px solid #c5d4f7; border-radius: 8px; padding: 12px 14px; margin-bottom: 14px;">' +
-                        '<div style="font-size: 0.8em; color: #555; margin-bottom: 6px;">Summary</div>' +
-                        '<div style="display: grid; grid-template-columns: 1fr 1fr; column-gap: 16px; row-gap: 6px; font-size: 0.9em; color: #555;">' +
-                            // Left column: realized / closed
-                            '<div>' +
-                                '<div><strong>Realized (closed)</strong></div>' +
-                                (hasClosedProfit
-                                    ? '<div>Closed strategies profit: <span style="font-weight: 600; color: ' + (closedClosedProfit >= 0 ? '#1E8449' : '#c0392b') + ';">' + formatPositionsAmount(closedClosedProfit) + '</span></div>'
-                                    : '<div>Closed strategies profit: <span style="font-weight: 600; color: #888;">$0.00</span></div>') +
-                                (avgPerDay != null
-                                    ? '<div>Avg/day (calendar): <span style="font-weight: 600; color: ' + (avgPerDay >= 0 ? '#1E8449' : '#c0392b') + ';">' + formatPositionsAmount(avgPerDay) + '</span></div>'
-                                    : '') +
-                            '</div>' +
-                            // Right column: open exposure
-                            '<div>' +
-                                '<div><strong>Open exposure</strong></div>' +
-                                (totalPlIfClose != null
-                                    ? '<div>If close now: <span style="font-weight: 600; color: ' + (totalPlIfClose >= 0 ? '#1E8449' : '#c0392b') + ';">' + formatPositionsAmount(totalPlIfClose) + '</span></div>'
-                                    : '') +
-                                (openDebitRaw < 0
-                                    ? '<div>Buying power (debit): <span style="font-weight: 600;">' + formatDebitCredit(openDebitRaw) + '</span></div>'
-                                    : '') +
-                                (hasOpenPositions
-                                    ? '<div>Net invested (open): <span style="font-weight: 600;">' + formatDebitCredit(openNetInvested) + '</span></div>'
-                                    : '') +
-                            '</div>' +
-                        '</div>' +
-                        '<div style="font-size: 0.9em; margin-top: 8px; color: #555;">Position P/L (from statement): <span style="font-weight: 600;">' + plText + '</span></div>' +
-                        (totalPlIfClose != null
-                            ? '<div style="font-size: 0.75em; color: #666; margin-top: 2px;">If close now uses mid price — net cash if you close open legs now</div>'
-                            : '') +
-                    '</div>';
-            } else {
-                summaryBlockHtml = '<div style="margin-bottom: 8px; font-weight: 600;">Position P/L: ' + plText + '</div>';
             }
 
             const refreshBtn = (isOpen && ticker) ? `<button type="button" id="${detailsId}-refresh" style="margin-left: 10px; padding: 5px 12px; font-size: 0.8em; border: 1px solid #667eea; border-radius: 6px; background: #667eea; color: white; cursor: pointer;">Refresh prices</button>` : '';
@@ -4417,8 +4885,7 @@
                 </div>
                 <div id="${detailsId}-close-loading" style="display: none; margin-bottom: 8px; color: #666;">Loading close value…</div>
                 <div id="${detailsId}-close-error" style="display: none; margin-bottom: 8px; color: #c0392b;"></div>
-                ${summaryBlockHtml}
-                ${detailRows.length > 0 ? '<div data-open-strategies style="margin-top: 14px;"><strong style="font-size: 0.9em; color: #2c3e50;">Trade details (open or unpaired strategies)</strong><div style="margin-top: 6px; max-height: 280px; overflow-y: auto;">' + detailsTableHtml + '</div></div>' : ''}
+                ${detailRows.length > 0 ? '<div data-open-strategies style="margin-top: 14px;"><strong style="font-size: 0.9em; color: #2c3e50;">Open strategies</strong><div style="margin-top: 6px; max-height: 280px; overflow-y: auto;">' + detailsTableHtml + '</div></div>' : ''}
                 ${closedPairsHtml}
                 ${!detailRows.length && !closedPairsHtml ? '<div style="color: #888;">No details available.</div>' : ''}
             `;
@@ -4804,6 +5271,29 @@
             if (uploadButton && !uploadButton.dataset.bound) {
                 uploadButton.addEventListener('click', uploadPositionsAnalyticsCsv);
                 uploadButton.dataset.bound = 'true';
+            }
+            if (body && !body.dataset.positionsCopyHandlerBound) {
+                body.addEventListener('click', function (e) {
+                    const icon = e.target.closest && e.target.closest('.positions-copy-icon');
+                    if (icon) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const copy = icon.getAttribute('data-copy');
+                        if (copy && navigator.clipboard && navigator.clipboard.writeText) {
+                            navigator.clipboard.writeText(copy).then(function () {
+                                icon.classList.remove('pi-copy');
+                                icon.classList.add('pi-check');
+                                icon.title = 'Copied!';
+                                setTimeout(function () {
+                                    icon.classList.remove('pi-check');
+                                    icon.classList.add('pi-copy');
+                                    icon.title = 'Copy trade to clipboard';
+                                }, 1500);
+                            });
+                        }
+                    }
+                });
+                body.dataset.positionsCopyHandlerBound = 'true';
             }
             status.textContent = 'Loading positions...';
             if (uploadStatus && !positionsUploadInProgress) uploadStatus.textContent = 'Loading...';
