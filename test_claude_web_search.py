@@ -44,8 +44,8 @@ Provide a summary of the news that caused the drop."""
     # Testing newer models including potential "Claude 4.5" models
     test_configs = [
         {
-            'name': 'claude-3-5-haiku-20241022 with web_search_20250305 (KNOWN WORKING)',
-            'model': 'claude-3-5-haiku-20241022',
+            'name': 'claude-haiku-4-5 with web_search_20250305',
+            'model': 'claude-haiku-4-5',
             'version': '2023-06-01',
             'tools': [{'type': 'web_search_20250305', 'name': 'web_search'}]
         },

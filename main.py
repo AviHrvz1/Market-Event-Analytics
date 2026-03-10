@@ -8128,7 +8128,7 @@ If you cannot find information for this ticker, return:
             }
             
             payload = {
-                'model': 'claude-3-5-haiku-20241022',
+                'model': 'claude-haiku-4-5',
                 'max_tokens': 500,
                 'messages': [
                     {
@@ -9929,7 +9929,7 @@ Just the number, nothing else."""
             }
             
             payload = {
-                'model': 'claude-3-5-haiku-20241022',  # Updated to support web search
+                'model': 'claude-haiku-4-5',  # Updated to support web search
                 'max_tokens': 200,  # Increased significantly to allow for web search + response
                 'tools': [{'type': 'web_search_20250305', 'name': 'web_search'}],  # Enable web search
                 'messages': [
@@ -10025,7 +10025,7 @@ Just the number, nothing else."""
                     # Make up to 3 follow-up calls (web search might need multiple rounds)
                     for follow_up_round in range(3):
                         follow_up_payload = {
-                            'model': 'claude-3-5-haiku-20241022',
+                            'model': 'claude-haiku-4-5',
                             'max_tokens': 200,  # Increased for follow-up
                             'tools': [{'type': 'web_search_20250305', 'name': 'web_search'}],
                             'messages': conversation_messages
@@ -10211,7 +10211,7 @@ The explanation should be plain text with proper line breaks. Use \\n for newlin
             }
             
             payload = {
-                'model': 'claude-3-5-haiku-20241022',
+                'model': 'claude-haiku-4-5',
                 'max_tokens': 1200,
                 'tools': [{'type': 'web_search_20250305', 'name': 'web_search'}],
                 'messages': [
@@ -10451,7 +10451,7 @@ The explanation should be plain text with proper line breaks. Use \\n for newlin
                     # Make up to 3 follow-up calls
                     for follow_up_round in range(3):
                         follow_up_payload = {
-                            'model': 'claude-3-5-haiku-20241022',
+                            'model': 'claude-haiku-4-5',
                             'max_tokens': 2000,
                             'tools': [{'type': 'web_search_20250305', 'name': 'web_search'}],
                             'messages': conversation_messages
