@@ -1789,10 +1789,11 @@ def _get_butterfly_expirations_both(ticker: str):
         exp_date = item.get('expirationDate') or item.get('expiration') or item.get('ExpirationDate')
         days = item.get('daysToExpiration') or item.get('DaysToExpiration')
         exp_type = item.get('expirationType') or item.get('ExpirationType')
-        standard = item.get('standard')
         if not exp_date or days is None:
             continue
-        is_weekly = (exp_type == 'W') or (standard is False)
+        # Only exclude explicit weeklies (type W). Do not use standard=False - it wrongly
+        # excludes monthlies like Apr 17 3rd-Friday (Schwab returns standard=False for some).
+        is_weekly = (exp_type == 'W')
         if not is_weekly:
             candidates.append({'expiration_date': exp_date, 'days_to_expiration': int(days)})
     exp30_cand = sorted([c for c in candidates if c['days_to_expiration'] >= 30], key=lambda x: x['days_to_expiration'])
@@ -2727,7 +2728,7 @@ def get_current_option_status():
             standard = item.get('standard')
             if not exp_date or days is None:
                 continue
-            is_weekly = (exp_type == 'W') or (standard is False)
+            is_weekly = (exp_type == 'W')  # Do not use standard=False; it wrongly excludes monthlies
             if days >= 20 and not is_weekly:
                 candidates.append({
                     'expiration_date': exp_date,
