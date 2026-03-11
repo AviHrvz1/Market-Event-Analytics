@@ -1585,7 +1585,6 @@
                             <select id="positions-ticker-filter" multiple placeholder="Select tickers..."></select>
                         </div>
                         <button id="positions-ticker-clear" style="padding: 6px 12px; border: none; border-radius: 6px; background: #e0e0e0; color: #333; cursor: pointer; font-size: 0.85em;">Clear</button>
-                        <span id="positions-next-update" style="display: none; font-size: 0.85em; color: #888; margin-left: 8px;">Next update in: <span id="positions-countdown">5:00</span></span>
                         <a id="positions-refresh-now-btn" href="#" style="font-size: 0.85em; margin-left: 8px; color: #667eea; text-decoration: underline; cursor: pointer; display: none;">Get alerts now</a>
                     </div>
                     <div id="positions-analytics-status" style="color: #666; font-size: 0.95em;">Loading positions...</div>
@@ -4348,18 +4347,8 @@
         let _alertDebounceTimer = null;
         let _lastAlertBatchTime = 0;
         const HIGHLIGHT_CLEAR_INTERVAL_MS = 5 * 60 * 1000;
-        const POSITIONS_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
         let masterBellsEnabled = false;
         let telegramEnabled = false;
-        let positionsRefreshTimer = null;
-        let positionsCountdownTimer = null;
-        let positionsNextRefreshAt = 0;
-
-        function refreshPositionsData() {
-            if (monitoredTickers.size === 0) return;
-            positionsNextRefreshAt = Date.now() + POSITIONS_REFRESH_INTERVAL_MS;
-            loadPositionsAnalytics(true);
-        }
 
         function checkAlertsNow() {
             if (monitoredTickers.size === 0) return;
@@ -4374,36 +4363,14 @@
                 });
         }
 
-        function updatePositionsCountdown() {
-            const span = document.getElementById('positions-countdown');
-            if (!span) return;
-            const remaining = Math.max(0, Math.ceil((positionsNextRefreshAt - Date.now()) / 1000));
-            const m = Math.floor(remaining / 60);
-            const s = remaining % 60;
-            span.textContent = m + ':' + (s < 10 ? '0' : '') + s;
-        }
-
         function startPositionsRefreshTimer() {
             if (monitoredTickers.size === 0) return;
-            if (positionsRefreshTimer) clearInterval(positionsRefreshTimer);
-            if (positionsCountdownTimer) clearInterval(positionsCountdownTimer);
-            // Don't refresh immediately - table already has data; next refresh in 5 min
-            positionsNextRefreshAt = Date.now() + POSITIONS_REFRESH_INTERVAL_MS;
-            const nextUpdateEl = document.getElementById('positions-next-update');
             const refreshBtn = document.getElementById('positions-refresh-now-btn');
-            if (nextUpdateEl) nextUpdateEl.style.display = 'inline';
             if (refreshBtn) refreshBtn.style.display = 'inline-block';
-            updatePositionsCountdown();
-            positionsRefreshTimer = setInterval(refreshPositionsData, POSITIONS_REFRESH_INTERVAL_MS);
-            positionsCountdownTimer = setInterval(updatePositionsCountdown, 1000);
         }
 
         function stopPositionsRefreshTimer() {
-            if (positionsRefreshTimer) { clearInterval(positionsRefreshTimer); positionsRefreshTimer = null; }
-            if (positionsCountdownTimer) { clearInterval(positionsCountdownTimer); positionsCountdownTimer = null; }
-            const nextUpdateEl = document.getElementById('positions-next-update');
             const refreshBtn = document.getElementById('positions-refresh-now-btn');
-            if (nextUpdateEl) nextUpdateEl.style.display = 'none';
             if (refreshBtn) refreshBtn.style.display = 'none';
         }
 
