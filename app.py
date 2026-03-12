@@ -53,6 +53,21 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') or _telegram_token or "your
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID') or _telegram_chat or "your_telegram_chat_id"
 
 
+def _sse_stream_safe(gen):
+    """Wrap SSE generator to catch Broken pipe (Errno 32) when client disconnects."""
+    try:
+        yield from gen
+    except BrokenPipeError:
+        pass  # Client disconnected, ignore
+    except ConnectionResetError:
+        pass  # Client disconnected, ignore
+    except OSError as e:
+        if getattr(e, 'errno', None) == 32:  # Broken pipe
+            pass
+        else:
+            raise
+
+
 def _get_data_dir():
     """Return persistent data directory. On EB use /var/app/data; locally use ./data."""
     return os.getenv('DATA_DIR') or os.path.join(os.path.dirname(__file__), 'data')
@@ -935,7 +950,7 @@ def get_layoffs_stream():
                 except:
                     pass
     
-    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+    return Response(stream_with_context(_sse_stream_safe(generate())), mimetype='text/event-stream')
 
 @app.route('/api/extract_search_subject', methods=['POST'])
 def extract_search_subject():
@@ -1487,7 +1502,7 @@ def get_bearish_analytics_stream():
             except Exception as e2:
                 yield f"data: {json.dumps({'type': 'error', 'message': f'Error serializing results: {str(e)}'})}\n\n"
     
-    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+    return Response(stream_with_context(_sse_stream_safe(generate())), mimetype='text/event-stream')
 
 @app.route('/api/bearish-analytics')
 def get_bearish_analytics():
@@ -1924,12 +1939,24 @@ def _process_butterfly_ticker(ticker: str, widths: list) -> dict:
                 return None
             s1 = [float(k) for k in call_map.get(exp_key, {}).keys()]
             s2 = [float(k) for k in put_map.get(exp_key, {}).keys()]
-            strikes = sorted(set(s1 + s2))
-            if not strikes:
+            all_strikes = sorted(set(s1 + s2))
+            if not all_strikes:
                 return None
             price = chain_data.get('underlyingPrice') or current_price or 0
+            # Use only 14 strikes nearest price (near the money) for unified check
+            _NUM_STRIKES_FOR_UNIFIED = 14
+            strikes_near_price = sorted(all_strikes, key=lambda s: abs(s - price))[:_NUM_STRIKES_FOR_UNIFIED]
+            strikes_for_unified = sorted(strikes_near_price)
+            # Check if strike intervals are unified (consistent spacing) or broken (gaps/jumps)
+            if len(strikes_for_unified) < 2:
+                strikes_unified = True
+            else:
+                gaps = [strikes_for_unified[i + 1] - strikes_for_unified[i] for i in range(len(strikes_for_unified) - 1)]
+                unique_gaps = set(round(g, 2) for g in gaps)
+                strikes_unified = len(unique_gaps) <= 1
+            strikes = all_strikes  # full chain for butterfly selection
             left_bf, right_bf = _find_butterflies_for_price(strikes, price, widths)
-            out = {}
+            out = {'strikes_unified': strikes_unified}
             if left_bf:
                 call_cost = _compute_butterfly_cost(chain_data, exp_date, left_bf[0], left_bf[1], left_bf[2], 'CALL')
                 put_cost = _compute_butterfly_cost(chain_data, exp_date, left_bf[0], left_bf[1], left_bf[2], 'PUT')
@@ -1974,6 +2001,9 @@ def _process_butterfly_ticker(ticker: str, widths: list) -> dict:
                     row['dte30'] = dte_result
                 if exp_date == exp40_date:
                     row['dte40'] = dte_result
+        # Row-level: unified only if all expirations have unified strikes
+        dte_results = [r for r in [row.get('dte30'), row.get('dte40')] if r]
+        row['strikes_unified'] = all(r.get('strikes_unified', True) for r in dte_results) if dte_results else True
     except ValueError as e:
         row['error'] = str(e)
     except Exception as e:
@@ -3789,7 +3819,7 @@ def monitor_alerts_stream():
             except queue.Empty:
                 yield f": keepalive\n\n"
     
-    return Response(event_stream(), mimetype='text/event-stream')
+    return Response(stream_with_context(_sse_stream_safe(event_stream())), mimetype='text/event-stream')
 
 
 if __name__ == '__main__':

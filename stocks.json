@@ -663,5 +663,15 @@
     "name": "Roblox Corporation",
     "industry": "Technology",
     "market_cap": 49734828779
+  },
+  "MU": {
+    "name": "Micron Technology, Inc.",
+    "industry": "Technology",
+    "market_cap": 65000
+  },
+  "APP": {
+    "name": "Apptio, Inc.",
+    "industry": "Technology",
+    "market_cap": 4500
   }
 }

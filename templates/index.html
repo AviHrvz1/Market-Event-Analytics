@@ -1541,7 +1541,7 @@
                         <button id="butterfly-refresh-now-btn" style="padding: 6px 12px; border: none; border-radius: 6px; background: #667eea; color: white; cursor: pointer; font-size: 0.85em; display: none;">Refresh now</button>
                         <span id="butterfly-next-update" style="font-size: 0.85em; color: #888; margin-left: 8px; display: none;">Next update in: <span id="butterfly-countdown">5:00</span></span>
                     </div>
-                    <div id="butterfly-arbitrage-status" style="color: #666; font-size: 0.95em;">Select tickers to load butterfly pricing.</div>
+                    <div id="butterfly-arbitrage-status" style="color: #666; font-size: 0.95em;">Select tickers to load butterfly pricing (TOS option chain).</div>
                 </div>
                 <div style="overflow-x: auto;">
                     <table id="butterfly-arbitrage-table" style="width: 100%; border-collapse: collapse; background: white; display: none;">
@@ -4076,6 +4076,63 @@
             }).catch(function () {});
         }
 
+        function addTickerToButterfly(ticker) {
+            const t = String(ticker || '').trim().toUpperCase();
+            if (!t) return;
+            function doAdd() {
+                if (!butterflyArbitrageTomSelect) return false;
+                const current = (butterflyArbitrageTomSelect.getValue() || []).map(function (v) { return String(v).trim().toUpperCase(); });
+                if (current.indexOf(t) >= 0) {
+                    if (typeof Toastify !== 'undefined') {
+                        Toastify({ text: t + ' is already in Butterfly Arbitrage', duration: 2500, gravity: 'top', position: 'right' }).showToast();
+                    } else {
+                        alert(t + ' is already in Butterfly Arbitrage');
+                    }
+                    return true;
+                }
+                try {
+                    if (!butterflyArbitrageTomSelect.options[t]) {
+                        butterflyArbitrageTomSelect.addOption({ value: t, text: t });
+                        butterflyArbitrageTomSelect.refreshOptions(false);
+                    }
+                    butterflyArbitrageTomSelect.setValue(current.concat([t]));
+                    if (typeof Toastify !== 'undefined') {
+                        Toastify({ text: t + ' added to Butterfly Arbitrage', duration: 2500, gravity: 'top', position: 'right' }).showToast();
+                    } else {
+                        alert(t + ' added to Butterfly Arbitrage');
+                    }
+                } catch (err) {
+                    console.error('[Butterfly] addTickerToButterfly error:', err);
+                    if (typeof Toastify !== 'undefined') {
+                        Toastify({ text: 'Failed to add ' + t, duration: 2500, gravity: 'top', position: 'right', backgroundColor: '#e74c3c' }).showToast();
+                    } else {
+                        alert('Failed to add ' + t);
+                    }
+                }
+                return true;
+            }
+            if (butterflyArbitrageTomSelect) {
+                doAdd();
+                return;
+            }
+            loadButterflyArbitrage();
+            let attempts = 0;
+            const maxAttempts = 15;
+            const interval = setInterval(function () {
+                attempts++;
+                if (butterflyArbitrageTomSelect && doAdd()) {
+                    clearInterval(interval);
+                } else if (attempts >= maxAttempts) {
+                    clearInterval(interval);
+                    if (typeof Toastify !== 'undefined') {
+                        Toastify({ text: 'Could not add ' + t + ' (Butterfly tab loading)', duration: 3000, gravity: 'top', position: 'right', backgroundColor: '#f39c12' }).showToast();
+                    } else {
+                        alert('Please open Butterfly Arbitrage tab first, then try again.');
+                    }
+                }
+            }, 200);
+        }
+
         function formatButterflyCell(dteData, ticker) {
             if (!dteData) return '<span style="color: #888;">N/A</span>';
             const left = dteData.left_butterfly;
@@ -4171,7 +4228,11 @@
             const dte30Html = formatButterflyCell(row.dte30, row.ticker);
             const dte40Html = formatButterflyCell(row.dte40, row.ticker);
             const errHtml = row.error ? '<div style="color: #dc2626; font-size: 0.85em;">' + row.error + '</div>' : '';
-            tr.cells[0].innerHTML = (row.ticker || '') + errHtml;
+            const chainIcon = row.strikes_unified === false
+                ? '<img src="/static/chain-broken.png" alt="TOS option chain: strike intervals have gaps" title="TOS option chain: strike intervals have gaps" style="width: 32px; height: 32px;" />'
+                : '<img src="/static/chain-unbroken.png" alt="TOS option chain: strike intervals are uniform" title="TOS option chain: strike intervals are uniform" style="width: 32px; height: 32px;" />';
+            tr.cells[0].innerHTML = '<span style="display: inline-flex; align-items: center; gap: 6px; justify-content: center;">' +
+                '<span>' + (row.ticker || '') + '</span>' + chainIcon + '</span>' + errHtml;
             tr.cells[1].textContent = priceStr;
             tr.cells[2].innerHTML = dte30Html;
             tr.cells[3].innerHTML = dte40Html;
@@ -4187,7 +4248,10 @@
                 const dte30Html = formatButterflyCell(row.dte30, row.ticker);
                 const dte40Html = formatButterflyCell(row.dte40, row.ticker);
                 const errHtml = row.error ? '<div style="color: #dc2626; font-size: 0.85em;">' + row.error + '</div>' : '';
-                tr.innerHTML = '<td style="padding: 8px 6px; text-align: center; font-weight: 500;">' + (row.ticker || '') + errHtml + '</td>' +
+                const chainIcon = row.strikes_unified === false
+                    ? '<img src="/static/chain-broken.png" alt="TOS option chain: strike intervals have gaps" title="TOS option chain: strike intervals have gaps" style="width: 32px; height: 32px;" />'
+                    : '<img src="/static/chain-unbroken.png" alt="TOS option chain: strike intervals are uniform" title="TOS option chain: strike intervals are uniform" style="width: 32px; height: 32px;" />';
+                tr.innerHTML = '<td style="padding: 8px 6px; text-align: center; font-weight: 500;"><span style="display: inline-flex; align-items: center; gap: 6px; justify-content: center;"><span>' + (row.ticker || '') + '</span>' + chainIcon + '</span>' + errHtml + '</td>' +
                     '<td style="padding: 8px 6px; text-align: center;">' + priceStr + '</td>' +
                     '<td style="padding: 8px 6px; text-align: center;">' + dte30Html + '</td>' +
                     '<td style="padding: 8px 6px; text-align: center;">' + dte40Html + '</td>';
@@ -4559,6 +4623,7 @@
                 targetTr.classList.add('profit-alert-highlight');
                 targetTr.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 targetTr.addEventListener('click', function clearHighlight(e) {
+                    if (e.target.closest('.positions-copy-icon')) return;
                     e.stopPropagation();
                     targetTr.classList.remove('profit-alert-highlight');
                 }, { once: true });
@@ -4690,6 +4755,8 @@
                 const copy = positionsCopyIcon.getAttribute('data-copy');
                 if (copy) {
                     copyToClipboard(copy).then(function () {
+                        const row = positionsCopyIcon.closest('tr');
+                        if (row) row.classList.remove('profit-alert-highlight');
                         positionsCopyIcon.classList.remove('pi-copy');
                         positionsCopyIcon.classList.add('pi-check');
                         positionsCopyIcon.title = 'Copied!';
@@ -4885,7 +4952,7 @@
                     const pd = perDetail[i];
                     const closeCreditDebit = pd && pd.close_credit_debit != null ? pd.close_credit_debit : null;
                     const copyStr = strategy && strategy.legs && strategy.legs.length > 0 ? buildPositionTradeCopy(position, strategy, closeCreditDebit, detail) : '';
-                    const copyIcon = copyStr ? '<span class="positions-copy-icon pi pi-copy" data-copy="' + escapeHtml(copyStr) + '" title="Copy trade to clipboard" style="cursor: pointer; opacity: 0.7; font-size: 0.85em;"></span>' : '';
+                    const copyIcon = copyStr ? '<span class="positions-copy-icon pi pi-copy" data-copy="' + escapeHtml(copyStr) + '" title="Copy trade to clipboard" style="cursor: pointer; opacity: 0.7; font-size: 1em;"></span>' : '';
                     const amount = Number(detail.amount) || 0;
                     const amountText = formatPositionsAmount(detail.amount) + ' (' + (amount < 0 ? 'debit' : 'credit') + ')';
                     let closeCell = '';
@@ -9125,6 +9192,11 @@
                                   onmouseover="this.style.background='#667eea'; this.style.transform='scale(1.15)';" 
                                   onmouseout="this.style.background='#f0f4ff'; this.style.transform='scale(1)';"
                                   title="Copy ticker to clipboard">📋</span>
+                            <span onclick="addTickerToButterfly('${stock.ticker}')" 
+                                  style="display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; background: #e8f5e9; border: 1px solid #4caf50; border-radius: 3px; cursor: pointer; font-size: 0.7em; transition: all 0.2s;" 
+                                  onmouseover="this.style.background='#4caf50'; this.style.transform='scale(1.15)';" 
+                                  onmouseout="this.style.background='#e8f5e9'; this.style.transform='scale(1)';"
+                                  title="Add to Butterfly Arbitrage">🦋</span>
                         </div>
                     </td>
                     <td style="padding: 8px 6px; text-align: center;">
